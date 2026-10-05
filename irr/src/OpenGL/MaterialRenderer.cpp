@@ -115,8 +115,12 @@ void COpenGL3MaterialRenderer::init(s32 &outMaterialTypeNr,
 		if (!createShader(GL_FRAGMENT_SHADER, pixelShaderProgram))
 			return;
 
-	for (u32 i = 0; i < EVA_COUNT; ++i)
+	for (u32 i = 0; i < EVA_COUNT; ++i) {
+		if (i >= EVA_INSTANCE_ROW0 &&
+				!Driver->queryFeature(EVDF_HARDWARE_INSTANCING))
+			continue;
 		GL.BindAttribLocation(Program, i, sBuiltInVertexAttributeNames[i]);
+	}
 
 	if (!linkProgram())
 		return;

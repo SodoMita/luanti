@@ -13,6 +13,7 @@
 #include "CNullDriver.h"
 #include "IMaterialRendererServices.h"
 #include "EDriverFeatures.h"
+#include "EVertexAttributes.h"
 #include "ExtensionHandler.h"
 #include "IContextManager.h"
 
@@ -63,6 +64,9 @@ public:
 		const scene::IIndexBuffer *ib, u32 primCount,
 		scene::E_PRIMITIVE_TYPE pType = scene::EPT_TRIANGLES) override;
 
+	bool drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
+			const core::matrix4 *transforms, u32 instanceCount) override;
+
 	IRenderTarget *addRenderTarget() override;
 
 	void blitRenderTarget(IRenderTarget *from, IRenderTarget *to) override;
@@ -80,6 +84,16 @@ public:
 	//! queries the features of the driver, returns true if feature is available
 	bool queryFeature(E_VIDEO_DRIVER_FEATURE feature) const override
 	{
+		if (feature == EVDF_HARDWARE_INSTANCING) {
+			const bool supported_version = Version.Spec == OpenGLSpec::ES ?
+					isVersionAtLeast(3, 0) :
+					(isVersionAtLeast(3, 3) ||
+							(queryExtension("GL_ARB_draw_instanced") &&
+							queryExtension("GL_ARB_instanced_arrays")));
+			return FeatureEnabled[feature] && supported_version &&
+					GL.DrawArraysInstanced && GL.DrawElementsInstanced &&
+					GL.VertexAttribDivisor && GetInteger(GL_MAX_VERTEX_ATTRIBS) >= EVA_COUNT;
+		}
 		return FeatureEnabled[feature] && COpenGL3ExtensionHandler::queryFeature(feature);
 	}
 
@@ -353,6 +367,8 @@ private:
 	bool EnableErrorTest;
 
 	OGLBufferObject QuadIndexVBO = OGLBufferObject(OGLBufferObject::TARGET_VBO);
+	OGLBufferObject InstanceMatrixVBO = OGLBufferObject(OGLBufferObject::TARGET_VBO);
+	u32 InstanceCount = 0;
 	void initQuadsIndices(u32 max_vertex_count = 65536);
 
 	u16 MaxJointTransforms = 0;

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <unordered_map>
 
 #include "CSceneManager.h"
 #include "IVideoDriver.h"
@@ -29,6 +30,38 @@
 #include "CEmptySceneNode.h"
 
 #include "CSceneCollisionManager.h"
+
+namespace
+{
+struct MeshInstanceBatchKey {
+	const scene::IMeshBuffer *buffer = nullptr;
+	video::SMaterial material;
+
+	bool operator==(const MeshInstanceBatchKey &other) const
+	{
+		return buffer == other.buffer && material == other.material;
+	}
+};
+
+struct MeshInstanceBatchKeyHash {
+	size_t operator()(const MeshInstanceBatchKey &key) const noexcept
+	{
+		size_t hash = std::hash<const scene::IMeshBuffer *>{}(key.buffer);
+		const size_t material_hash = std::hash<video::SMaterial>{}(key.material);
+		return hash ^ (material_hash + 0x9e3779b9 + (hash << 6) + (hash >> 2));
+	}
+};
+
+struct MeshInstanceBatch {
+	const scene::IMeshBuffer *buffer = nullptr;
+	video::SMaterial material;
+	u32 instance_count = 0;
+	core::matrix4 first_transform;
+	std::pair<scene::AnimatedMeshSceneNode *, u32> first_owner;
+	std::vector<core::matrix4> transforms;
+	std::vector<std::pair<scene::AnimatedMeshSceneNode *, u32>> owners;
+};
+}
 
 namespace scene
 {
@@ -515,10 +548,80 @@ void CSceneManager::drawAll()
 		CurrentRenderPass = ESNRP_SOLID;
 		Driver->getOverrideMaterial().Enabled = ((Driver->getOverrideMaterial().EnablePasses & CurrentRenderPass) != 0);
 
+		// Batch repeated, static mesh entities only when the material has a matching
+		// instanced shader. Dynamic/transparent/skinned meshes stay on the regular
+		// scene-node path.
+		if (Driver->queryFeature(video::EVDF_HARDWARE_INSTANCING) &&
+				!Driver->getOverrideMaterial().Enabled) {
+			std::unordered_map<MeshInstanceBatchKey, MeshInstanceBatch,
+					MeshInstanceBatchKeyHash> batches;
+			batches.reserve(SolidNodeList.size());
+
+			for (auto &entry : SolidNodeList) {
+				auto *node = dynamic_cast<AnimatedMeshSceneNode *>(entry.Node);
+				if (!node || !node->canBeInstanced() || node->isDebugDataVisible() ||
+						DebugDataBits)
+					continue;
+
+				auto *mesh = node->getMesh();
+				for (u32 i = 0; i < node->getMaterialCount(); ++i) {
+					auto *buffer = mesh->getMeshBuffer(i);
+					if (!buffer || buffer->getVertexType() != video::EVT_STANDARD)
+						continue;
+
+					video::SMaterial material = node->getRenderMaterial(i);
+					material.MaterialType = node->getInstancedMaterialType();
+					if (Driver->needsTransparentRenderPass(material))
+						continue;
+
+					MeshInstanceBatchKey key{buffer, material};
+					auto [it, inserted] = batches.try_emplace(key);
+					MeshInstanceBatch &batch = it->second;
+					if (inserted) {
+						batch.buffer = buffer;
+						batch.material = material;
+					}
+					const auto transform = node->getAbsoluteTransformation();
+					if (batch.instance_count == 0) {
+						batch.first_transform = transform;
+						batch.first_owner = {node, i};
+					} else {
+						if (batch.instance_count == 1) {
+							batch.transforms.reserve(2);
+						batch.owners.reserve(2);
+						batch.transforms.push_back(batch.first_transform);
+						batch.owners.push_back(batch.first_owner);
+						}
+						batch.transforms.push_back(transform);
+						batch.owners.emplace_back(node, i);
+					}
+					++batch.instance_count;
+				}
+			}
+
+			for (auto &entry : batches) {
+				MeshInstanceBatch &batch = entry.second;
+				if (batch.instance_count < 2)
+					continue;
+				Driver->setMaterial(batch.material);
+				Driver->setTransform(video::ETS_WORLD, core::IdentityMatrix);
+				if (!Driver->drawMeshBufferInstanced(batch.buffer, batch.transforms.data(),
+						static_cast<u32>(batch.transforms.size())))
+					continue;
+				for (const auto &[node, material] : batch.owners)
+					node->markBatchedMaterial(material);
+			}
+			Driver->setMaterial(video::SMaterial());
+			Driver->setTransform(video::ETS_WORLD, core::IdentityMatrix);
+		}
+
 		std::sort(SolidNodeList.begin(), SolidNodeList.end());
 
-		for (auto &it : SolidNodeList)
-			render_node(it.Node);
+		for (auto &it : SolidNodeList) {
+			auto *node = dynamic_cast<AnimatedMeshSceneNode *>(it.Node);
+			if (!node || !node->areAllSolidMaterialsBatched(Driver))
+				render_node(it.Node);
+		}
 
 		SolidNodeList.clear();
 	}

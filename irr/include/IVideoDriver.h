@@ -745,6 +745,15 @@ public:
 	/** \param mb Buffer to draw */
 	virtual void drawMeshBuffer(const scene::IMeshBuffer *mb) = 0;
 
+	//! Draws one mesh buffer for multiple world transforms in a single draw call.
+	/** The caller must have set an instancing-aware material and identity world
+	transform. Returns false when the driver or mesh buffer cannot be instanced.
+	\param mb Buffer to draw.
+	\param transforms Array of per-instance world transforms.
+	\param instanceCount Number of transforms. */
+	virtual bool drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
+			const core::matrix4 *transforms, u32 instanceCount) = 0;
+
 	/**
 	 * Draws a mesh from individual vertex and index buffers.
 	 * @param vb vertices to use

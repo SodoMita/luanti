@@ -16,6 +16,10 @@ enum E_VERTEX_ATTRIBUTES
 	EVA_BINORMAL,
 	EVA_WEIGHTS,
 	EVA_JOINT_IDS,
+	EVA_INSTANCE_ROW0,
+	EVA_INSTANCE_ROW1,
+	EVA_INSTANCE_ROW2,
+	EVA_INSTANCE_ROW3,
 	EVA_COUNT
 };
 
@@ -31,6 +35,10 @@ const char *const sBuiltInVertexAttributeNames[] = {
 		"inVertexBinormal",
 		"inVertexWeights",
 		"inVertexJointIDs",
+		"inInstanceRow0",
+		"inInstanceRow1",
+		"inInstanceRow2",
+		"inInstanceRow3",
 		0,
 	};
 

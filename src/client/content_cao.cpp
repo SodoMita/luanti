@@ -591,7 +591,8 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 	infostream << "GenericCAO::addToScene(): " <<
 		enum_to_string(es_ObjectVisual, m_prop.visual)<< std::endl;
 
-	auto updateMaterialType = [this](bool hw_skin) {
+	MaterialType object_material_type = TILE_MATERIAL_BASIC;
+	auto updateMaterialType = [this, &object_material_type](bool hw_skin) {
 		if (m_prop.visual != OBJECTVISUAL_NODE &&
 				m_prop.visual != OBJECTVISUAL_WIELDITEM &&
 				m_prop.visual != OBJECTVISUAL_ITEM)
@@ -606,6 +607,7 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 				material_type = (m_prop.use_texture_alpha) ?
 					TILE_MATERIAL_PLAIN_ALPHA : TILE_MATERIAL_PLAIN;
 
+			object_material_type = material_type;
 			ShaderFeatures features;
 			features.skinning = hw_skin;
 			u32 shader_id = shader_source->getShader(
@@ -716,28 +718,44 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 
 			setSceneNodeMaterials(m_animated_meshnode, mesh->needsHwSkinning());
 
+			if (!m_is_local_player && mesh->getMeshType() == scene::EAMT_STATIC &&
+					mesh->getTrackCount() == 0 && !mesh->needsHwSkinning() &&
+					RenderingEngine::get_video_driver()->queryFeature(
+							video::EVDF_HARDWARE_INSTANCING)) {
+				ShaderFeatures features;
+				features.instancing = true;
+				IShaderSource *shader_source = m_client->getShaderSource();
+				u32 shader_id = shader_source->getShader(
+						"object_shader", object_material_type, NDT_NORMAL, features);
+				m_animated_meshnode->setInstancedMaterialType(
+						shader_source->getShaderInfo(shader_id).material);
+			}
+
 			m_animated_meshnode->forEachMaterial([this] (auto &mat) {
 				mat.BackfaceCulling = m_prop.backface_culling;
 			});
 
-			m_animated_meshnode->setOnAnimateCallback([&](f32 dtime) {
-				for (auto it = m_bone_override.begin(); it != m_bone_override.end();) {
-					BoneOverride &props = it->second;
-					props.dtime_passed += dtime;
+			if (mesh->getMeshType() != scene::EAMT_STATIC ||
+					mesh->getTrackCount() != 0 || mesh->needsHwSkinning()) {
+				m_animated_meshnode->setOnAnimateCallback([&](f32 dtime) {
+					for (auto it = m_bone_override.begin(); it != m_bone_override.end();) {
+						BoneOverride &props = it->second;
+						props.dtime_passed += dtime;
 
-					if (props.isIdentity()) {
-						it = m_bone_override.erase(it);
-						continue;
-					}
+						if (props.isIdentity()) {
+							it = m_bone_override.erase(it);
+							continue;
+						}
 
-					if (auto *bone = m_animated_meshnode->getJointNode(it->first.c_str())) {
-						bone->setPosition(props.getPosition(bone->getPosition()));
-						bone->setRotation(props.getRotationEulerDeg(bone->getRotation()));
-						bone->setScale(props.getScale(bone->getScale()));
+						if (auto *bone = m_animated_meshnode->getJointNode(it->first.c_str())) {
+							bone->setPosition(props.getPosition(bone->getPosition()));
+							bone->setRotation(props.getRotationEulerDeg(bone->getRotation()));
+							bone->setScale(props.getScale(bone->getScale()));
+						}
+						++it;
 					}
-					++it;
-				}
-			});
+				});
+			}
 		} else {
 			errorstream<<"GenericCAO::addToScene(): Could not load mesh "<<m_prop.mesh<<std::endl;
 		}

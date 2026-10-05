@@ -49,6 +49,7 @@ void AnimatedMeshSceneNode::advanceAnimations(f32 dtime_s)
 void AnimatedMeshSceneNode::OnRegisterSceneNode()
 {
 	if (IsVisible && Mesh) {
+		clearBatchedMaterials();
 		// because this node supports rendering of mixed mode meshes consisting of
 		// transparent and solid material at the same time, we need to go through all
 		// materials, check of what type they are and register this node for the right
@@ -89,6 +90,13 @@ void AnimatedMeshSceneNode::OnRegisterSceneNode()
 //! OnAnimate() is called just before rendering the whole scene.
 void AnimatedMeshSceneNode::OnAnimate(u32 time_ms)
 {
+	if (Mesh && Mesh->getMeshType() == EAMT_STATIC &&
+			Mesh->getTrackCount() == 0 && !OnAnimateCallback) {
+		Box = Mesh->getBoundingBox();
+		ISceneNode::OnAnimate(time_ms);
+		return;
+	}
+
 	if (LastTimeMs == 0) { // first frame
 		LastTimeMs = time_ms;
 	}
@@ -146,13 +154,15 @@ void AnimatedMeshSceneNode::render()
 	driver->setTransform(video::ETS_WORLD, AbsoluteTransformation);
 
 	for (u32 i = 0; i < Mesh->getMeshBufferCount(); ++i) {
-		const bool transparent = driver->needsTransparentRenderPass(Materials[i]);
+		const video::SMaterial &material = getRenderMaterial(i);
+		const bool transparent = driver->needsTransparentRenderPass(material);
 
 		// only render transparent buffer if this is the transparent render pass
 		// and solid only in solid pass
-		if (transparent == isTransparentPass) {
+		if (transparent == isTransparentPass &&
+				!(SceneManager->getSceneNodeRenderPass() == scene::ESNRP_SOLID &&
+						isBatchedMaterial(i))) {
 			scene::IMeshBuffer *mb = Mesh->getMeshBuffer(i);
-			const video::SMaterial &material = ReadOnlyMaterials ? mb->getMaterial() : Materials[i];
 			if (RenderFromIdentity)
 				driver->setTransform(video::ETS_WORLD, core::IdentityMatrix);
 			else if (Mesh->getMeshType() == EAMT_SKINNED)
@@ -254,10 +264,56 @@ video::SMaterial &AnimatedMeshSceneNode::getMaterial(u32 i)
 	return Materials[i];
 }
 
+const video::SMaterial &AnimatedMeshSceneNode::getRenderMaterial(u32 i) const
+{
+	return ReadOnlyMaterials ? Mesh->getMeshBuffer(i)->getMaterial() : Materials[i];
+}
+
 //! returns amount of materials used by this scene node.
 u32 AnimatedMeshSceneNode::getMaterialCount() const
 {
 	return Materials.size();
+}
+
+bool AnimatedMeshSceneNode::canBeInstanced() const
+{
+	return InstancedMaterialType != video::EMT_INVALID && Mesh &&
+			Mesh->getMeshType() == EAMT_STATIC && Mesh->getTrackCount() == 0 &&
+			!JointsUsed && !RenderFromIdentity;
+}
+
+void AnimatedMeshSceneNode::clearBatchedMaterials()
+{
+	BatchedMaterials.assign(getMaterialCount(), false);
+}
+
+void AnimatedMeshSceneNode::markBatchedMaterial(u32 material)
+{
+	if (material < BatchedMaterials.size())
+		BatchedMaterials[material] = true;
+}
+
+bool AnimatedMeshSceneNode::isBatchedMaterial(u32 material) const
+{
+	return material < BatchedMaterials.size() && BatchedMaterials[material];
+}
+
+bool AnimatedMeshSceneNode::areAllSolidMaterialsBatched(
+		const video::IVideoDriver *driver) const
+{
+	if (!driver || !canBeInstanced())
+		return false;
+
+	bool has_solid_material = false;
+	for (u32 i = 0; i < getMaterialCount(); ++i) {
+		const video::SMaterial &material = getRenderMaterial(i);
+		if (driver->needsTransparentRenderPass(material))
+			continue;
+		has_solid_material = true;
+		if (!isBatchedMaterial(i))
+			return false;
+	}
+	return has_solid_material;
 }
 
 //! Returns a pointer to a child node, which has the same transformation as
@@ -358,6 +414,9 @@ void AnimatedMeshSceneNode::setMesh(IAnimatedMesh *mesh)
 	if (Mesh != mesh) {
 		Mesh.grab(mesh);
 	}
+
+	InstancedMaterialType = video::EMT_INVALID;
+	BatchedMaterials.clear();
 
 	// get materials and bounding box
 	Box = Mesh->getBoundingBox();
@@ -526,6 +585,7 @@ ISceneNode *AnimatedMeshSceneNode::clone(ISceneNode *newParent, ISceneManager *n
 	newNode->PerJoint.PreTransSaves = PerJoint.PreTransSaves;
 	newNode->Anim = Anim;
 	newNode->RenderFromIdentity = RenderFromIdentity;
+	newNode->InstancedMaterialType = InstancedMaterialType;
 
 	return newNode;
 }

@@ -176,6 +176,7 @@ COpenGL3DriverBase::COpenGL3DriverBase(const SIrrlichtCreationParameters &params
 COpenGL3DriverBase::~COpenGL3DriverBase()
 {
 	QuadIndexVBO.destroy();
+	InstanceMatrixVBO.destroy();
 	JointTransformsUBO.destroy();
 
 	deleteMaterialRenders();
@@ -568,6 +569,69 @@ void COpenGL3DriverBase::deleteHardwareBuffer(SHWBufferLink *HWBuffer)
 	b->Vbo.destroy();
 
 	CNullDriver::deleteHardwareBuffer(HWBuffer);
+}
+
+bool COpenGL3DriverBase::drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
+		const core::matrix4 *transforms, u32 instanceCount)
+{
+	if (!mb || !transforms || instanceCount < 2 ||
+			!queryFeature(EVDF_HARDWARE_INSTANCING) ||
+			mb->getVertexType() != EVT_STANDARD ||
+			mb->getVertexCount() == 0 || mb->getPrimitiveCount() == 0)
+		return false;
+
+	const auto *vb = mb->getVertexBuffer();
+	const auto *ib = mb->getIndexBuffer();
+	if (!vb || !ib || vb->getWeightBuffer())
+		return false;
+
+	// Upload transforms separately from the shared mesh data. Irrlicht stores
+	// matrices row-major; each row attribute becomes a GLSL matrix column, which
+	// matches the transposed convention used for uniform matrices.
+	InstanceMatrixVBO.upload(transforms,
+			static_cast<size_t>(instanceCount) * sizeof(core::matrix4), 0, GL_STREAM_DRAW);
+	if (!InstanceMatrixVBO.exists())
+		return false;
+
+	auto *hwvert = static_cast<SHWBufferLink_opengl *>(getBufferLink(vb));
+	auto *hwidx = static_cast<SHWBufferLink_opengl *>(getBufferLink(ib));
+	updateHardwareBuffer(hwvert);
+	updateHardwareBuffer(hwidx);
+
+	const void *vertices = vb->getData();
+	if (hwvert) {
+		assert(hwvert->Vbo.exists());
+		GL.BindBuffer(GL_ARRAY_BUFFER, hwvert->Vbo.getName());
+		vertices = nullptr;
+	} else {
+		// The instance upload left its VBO bound; client-side vertex pointers
+		// must be specified with GL_ARRAY_BUFFER set to zero.
+		GL.BindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+
+	const void *indices = ib->getData();
+	if (hwidx) {
+		assert(hwidx->Vbo.exists());
+		GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, hwidx->Vbo.getName());
+		indices = nullptr;
+	} else {
+		GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	}
+
+	InstanceCount = instanceCount;
+	const u32 primitives = mb->getPrimitiveCount();
+	drawVertexPrimitiveList(vertices, vb->getCount(), indices, primitives,
+			vb->getType(), mb->getPrimitiveType(), ib->getType());
+	InstanceCount = 0;
+
+	// drawVertexPrimitiveList accounts for a single instance; correct the
+	// primitive statistic while still counting this as one draw call.
+	FrameStats.PrimitivesDrawn += primitives * (instanceCount - 1);
+
+	// Do not leak our buffer bindings into later client-side draws.
+	GL.BindBuffer(GL_ARRAY_BUFFER, 0);
+	GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+	return true;
 }
 
 void COpenGL3DriverBase::drawBuffers(const scene::IVertexBuffer *vb,
@@ -1016,25 +1080,46 @@ void COpenGL3DriverBase::drawGeneric(const void *vertices, const void *indexList
 	switch (pType) {
 	case scene::EPT_POINTS:
 	case scene::EPT_POINT_SPRITES:
-		GL.DrawArrays(GL_POINTS, 0, primitiveCount);
+		if (InstanceCount)
+			GL.DrawArraysInstanced(GL_POINTS, 0, primitiveCount, InstanceCount);
+		else
+			GL.DrawArrays(GL_POINTS, 0, primitiveCount);
 		break;
 	case scene::EPT_LINE_STRIP:
-		GL.DrawElements(GL_LINE_STRIP, primitiveCount + 1, indexSize, indexList);
+		if (InstanceCount)
+			GL.DrawElementsInstanced(GL_LINE_STRIP, primitiveCount + 1, indexSize, indexList, InstanceCount);
+		else
+			GL.DrawElements(GL_LINE_STRIP, primitiveCount + 1, indexSize, indexList);
 		break;
 	case scene::EPT_LINE_LOOP:
-		GL.DrawElements(GL_LINE_LOOP, primitiveCount, indexSize, indexList);
+		if (InstanceCount)
+			GL.DrawElementsInstanced(GL_LINE_LOOP, primitiveCount, indexSize, indexList, InstanceCount);
+		else
+			GL.DrawElements(GL_LINE_LOOP, primitiveCount, indexSize, indexList);
 		break;
 	case scene::EPT_LINES:
-		GL.DrawElements(GL_LINES, primitiveCount * 2, indexSize, indexList);
+		if (InstanceCount)
+			GL.DrawElementsInstanced(GL_LINES, primitiveCount * 2, indexSize, indexList, InstanceCount);
+		else
+			GL.DrawElements(GL_LINES, primitiveCount * 2, indexSize, indexList);
 		break;
 	case scene::EPT_TRIANGLE_STRIP:
-		GL.DrawElements(GL_TRIANGLE_STRIP, primitiveCount + 2, indexSize, indexList);
+		if (InstanceCount)
+			GL.DrawElementsInstanced(GL_TRIANGLE_STRIP, primitiveCount + 2, indexSize, indexList, InstanceCount);
+		else
+			GL.DrawElements(GL_TRIANGLE_STRIP, primitiveCount + 2, indexSize, indexList);
 		break;
 	case scene::EPT_TRIANGLE_FAN:
-		GL.DrawElements(GL_TRIANGLE_FAN, primitiveCount + 2, indexSize, indexList);
+		if (InstanceCount)
+			GL.DrawElementsInstanced(GL_TRIANGLE_FAN, primitiveCount + 2, indexSize, indexList, InstanceCount);
+		else
+			GL.DrawElements(GL_TRIANGLE_FAN, primitiveCount + 2, indexSize, indexList);
 		break;
 	case scene::EPT_TRIANGLES:
-		GL.DrawElements(GL_TRIANGLES, primitiveCount * 3, indexSize, indexList);
+		if (InstanceCount)
+			GL.DrawElementsInstanced(GL_TRIANGLES, primitiveCount * 3, indexSize, indexList, InstanceCount);
+		else
+			GL.DrawElements(GL_TRIANGLES, primitiveCount * 3, indexSize, indexList);
 		break;
 	default:
 		break;
@@ -1064,12 +1149,31 @@ void COpenGL3DriverBase::beginDraw(const VertexType &vertexType, uintptr_t verti
 			break;
 		}
 	}
+
+	if (InstanceCount) {
+		GL.BindBuffer(GL_ARRAY_BUFFER, InstanceMatrixVBO.getName());
+		for (u32 row = 0; row < 4; ++row) {
+			const u32 index = EVA_INSTANCE_ROW0 + row;
+			GL.EnableVertexAttribArray(index);
+			GL.VertexAttribPointer(index, 4, GL_FLOAT, GL_FALSE, sizeof(core::matrix4),
+					reinterpret_cast<void *>(row * 4 * sizeof(f32)));
+			GL.VertexAttribDivisor(index, 1);
+		}
+	}
 }
 
 void COpenGL3DriverBase::endDraw(const VertexType &vertexType)
 {
 	for (auto &attr : vertexType)
 		GL.DisableVertexAttribArray(attr.Index);
+
+	if (InstanceCount) {
+		for (u32 row = 0; row < 4; ++row) {
+			const u32 index = EVA_INSTANCE_ROW0 + row;
+			GL.DisableVertexAttribArray(index);
+			GL.VertexAttribDivisor(index, 0);
+		}
+	}
 }
 
 ITexture *COpenGL3DriverBase::createDeviceDependentTexture(const io::path &name, E_TEXTURE_TYPE type, const std::vector<IImage*> &images)

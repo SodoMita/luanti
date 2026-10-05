@@ -236,6 +236,8 @@ struct ShaderFeatures {
 	/// Joint transforms are expected in the JointMatrices UBO.
 	/// @see irr::video::IVideoDriver::setJointTransforms
 	bool skinning = false;
+	/// Use per-instance transform vertex attributes (for static mesh entities).
+	bool instancing = false;
 
 	void setConstants(ShaderConstants &consts) const;
 };

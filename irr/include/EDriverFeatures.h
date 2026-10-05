@@ -82,6 +82,9 @@ enum E_VIDEO_DRIVER_FEATURE
 	//! Are vertex buffer objects supported?
 	EVDF_VERTEX_BUFFER_OBJECT,
 
+	//! Can the driver draw mesh buffers with per-instance transforms?
+	EVDF_HARDWARE_INSTANCING,
+
 	//! Supports Alpha To Coverage
 	EVDF_ALPHA_TO_COVERAGE,
 

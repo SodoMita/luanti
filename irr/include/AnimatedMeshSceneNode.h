@@ -14,6 +14,11 @@
 #include "irr_ptr.h"
 #include "matrix4.h"
 
+namespace video
+{
+class IVideoDriver;
+}
+
 namespace scene
 {
 
@@ -100,6 +105,24 @@ public:
 	IAnimatedMesh *getMesh()
 	{ return Mesh.get(); }
 
+	//! Select an instancing-aware material for static entity batching.
+	void setInstancedMaterialType(video::E_MATERIAL_TYPE type)
+	{ InstancedMaterialType = type; }
+	video::E_MATERIAL_TYPE getInstancedMaterialType() const
+	{ return InstancedMaterialType; }
+
+	//! Get the material that render() will use for a mesh buffer.
+	const video::SMaterial &getRenderMaterial(u32 i) const;
+
+	//! Whether this is a static mesh node configured for hardware instancing.
+	bool canBeInstanced() const;
+
+	//! Per-frame bookkeeping used by CSceneManager's solid-pass batching.
+	void clearBatchedMaterials();
+	void markBatchedMaterial(u32 material);
+	bool isBatchedMaterial(u32 material) const;
+	bool areAllSolidMaterialsBatched(const video::IVideoDriver *driver) const;
+
 	//! updates the absolute position based on the relative and the parents position
 	void updateAbsolutePosition() override;
 
@@ -134,6 +157,8 @@ private:
 
 	bool ReadOnlyMaterials;
 	bool RenderFromIdentity;
+	video::E_MATERIAL_TYPE InstancedMaterialType = video::EMT_INVALID;
+	std::vector<bool> BatchedMaterials;
 
 	s32 PassCount;
 	std::function<void(f32)> OnAnimateCallback;

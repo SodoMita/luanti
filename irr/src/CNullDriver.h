@@ -266,6 +266,12 @@ public:
 			mb->getPrimitiveCount(), mb->getPrimitiveType());
 	}
 
+	bool drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
+			const core::matrix4 *transforms, u32 instanceCount) override
+	{
+		return false;
+	}
+
 	// Note: this should handle hw buffers
 	virtual void drawBuffers(const scene::IVertexBuffer *vb,
 		const scene::IIndexBuffer *ib, u32 primCount,

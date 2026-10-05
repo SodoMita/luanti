@@ -117,16 +117,26 @@ void main(void)
 	vec3 skinNormal = inVertexNormal;
 #endif
 
+#ifdef USE_INSTANCING
+	mat4 instanceMatrix = mat4(inInstanceRow0, inInstanceRow1,
+			inInstanceRow2, inInstanceRow3);
+	vec4 instancePos = instanceMatrix * skinPos;
+	vec3 instanceNormal = mat3(instanceMatrix) * skinNormal;
+#else
+	vec4 instancePos = skinPos;
+	vec3 instanceNormal = skinNormal;
+#endif
+
 #ifdef USE_ARRAY_TEXTURE
 	varTexLayer = inVertexAux;
 #endif
 	varTexCoord = (mTexture * vec4(inTexCoord0.xy, 1.0, 1.0)).st;
 
-	gl_Position = mWorldViewProj * skinPos;
+	gl_Position = mWorldViewProj * instancePos;
 
-	vNormal = (mWorld * vec4(skinNormal, 0.0)).xyz;
-	worldPosition = (mWorld * skinPos).xyz;
-	eyeVec = -(mWorldView * skinPos).xyz;
+	vNormal = (mWorld * vec4(instanceNormal, 0.0)).xyz;
+	worldPosition = (mWorld * instancePos).xyz;
+	eyeVec = -(mWorldView * instancePos).xyz;
 
 #if (MATERIAL_TYPE == TILE_MATERIAL_PLAIN) || (MATERIAL_TYPE == TILE_MATERIAL_PLAIN_ALPHA)
 	vIDiff = 1.0;
@@ -165,7 +175,13 @@ void main(void)
 		/* normalOffsetScale is in world coordinates (1/10th of a meter)
 		   z_bias is in light space coordinates */
 		float normalOffsetScale, z_bias;
-		float pFactor = getPerspectiveFactor(getRelativePosition(m_ShadowViewProj * mWorld * inVertexPosition));
+#ifdef USE_INSTANCING
+		vec4 shadowVertexPos = instancePos;
+#else
+		vec4 shadowVertexPos = inVertexPosition;
+#endif
+		float pFactor = getPerspectiveFactor(getRelativePosition(
+				m_ShadowViewProj * mWorld * shadowVertexPos));
 		if (f_normal_length > 0.0) {
 			nNormal = normalize(vNormal);
 			cosLight = max(1e-5, dot(nNormal, -v_LightDirection));
@@ -183,7 +199,8 @@ void main(void)
 		}
 		z_bias *= pFactor * pFactor / f_textureresolution / f_shadowfar;
 
-		shadow_position = applyPerspectiveDistortion(m_ShadowViewProj * mWorld * (inVertexPosition + vec4(normalOffsetScale * nNormal, 0.0))).xyz;
+		shadow_position = applyPerspectiveDistortion(m_ShadowViewProj * mWorld *
+				(shadowVertexPos + vec4(normalOffsetScale * nNormal, 0.0))).xyz;
 		shadow_position.z -= z_bias;
 		perspective_factor = pFactor;
 
