@@ -218,6 +218,7 @@ protected:
 	void updateClouds(float dtime);
 	void updateShadows();
 	void drawScene(ProfilerGraph *graph, RunStats *stats);
+	void maybeAutoScreenshot();
 
 	// Misc
 	void showOverlayMessage(const char *msg, float dtime, int percent,

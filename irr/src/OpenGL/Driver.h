@@ -15,6 +15,7 @@
 #include "EDriverFeatures.h"
 #include "ExtensionHandler.h"
 #include "IContextManager.h"
+#include <unordered_map>
 
 namespace video
 {
@@ -62,6 +63,16 @@ public:
 	void drawBuffers(const scene::IVertexBuffer *vb,
 		const scene::IIndexBuffer *ib, u32 primCount,
 		scene::E_PRIMITIVE_TYPE pType = scene::EPT_TRIANGLES) override;
+
+	void drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
+			const f32 *instanceMatrices, u32 instanceCount) override;
+
+	bool queryInstancingSupport() const override
+	{
+		return UseInstancing;
+	}
+
+	bool canDrawInstanced(const scene::IMeshBuffer *mb) override;
 
 	IRenderTarget *addRenderTarget() override;
 
@@ -303,6 +314,50 @@ protected:
 
 	void beginDraw(const VertexType &vertexType, uintptr_t verticesBase);
 	void endDraw(const VertexType &vertexType);
+
+	//! Vertex array object cache.
+	//!
+	//! The vertex attribute state (glVertexAttribPointer + glEnableVertexAttribArray)
+	//! depends only on the vertex buffer, the index buffer and the vertex type.
+	//! Storing it in a VAO means it is set up once instead of on every draw call,
+	//! which saves a significant number of GL calls when lots of small mesh buffers
+	//! are drawn (e.g. many objects sharing one mesh, or mapblocks).
+	struct SVAOKey {
+		GLuint VertexBuffer;
+		GLuint IndexBuffer;
+		E_VERTEX_TYPE VertexType;
+
+		bool operator==(const SVAOKey &other) const
+		{
+			return VertexBuffer == other.VertexBuffer && IndexBuffer == other.IndexBuffer
+					&& VertexType == other.VertexType;
+		}
+	};
+
+	struct SVAOKeyHash {
+		std::size_t operator()(const SVAOKey &k) const
+		{
+			std::size_t h = k.VertexBuffer * 0x9E3779B97F4A7C15ull;
+			h ^= k.IndexBuffer * 0xC2B2AE3D27D4EB4Full;
+			h ^= (std::size_t)k.VertexType + 0x165667B19E3779F9ull;
+			return h;
+		}
+	};
+
+	/// @return a VAO with the attribute setup for these buffers, or 0 on failure
+	GLuint getVAO(GLuint vb, GLuint ib, E_VERTEX_TYPE vType);
+	/// Delete all cached VAOs. Necessary whenever a GL buffer is deleted,
+	/// since GL may reuse the buffer name afterwards.
+	void clearVAOCache();
+
+	std::unordered_map<SVAOKey, GLuint, SVAOKeyHash> VAOCache;
+	/// VAO to be bound for the next draw call (0 = attribute state set per draw)
+	GLuint PendingVAO = 0;
+	bool UseVAOCache = false;
+
+	/// Buffer holding per-instance transformation matrices, grown as needed
+	OGLBufferObject InstanceMatrixVBO{OGLBufferObject::TARGET_VBO};
+	bool UseInstancing = false;
 
 	COpenGL3CacheHandler *CacheHandler;
 	core::stringc Name;

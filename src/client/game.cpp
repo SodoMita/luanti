@@ -44,6 +44,7 @@
 #include "util/basic_macros.h"
 #include "util/directiontables.h"
 #include "util/quicktune_shortcutter.h"
+#include "util/screenshot.h"
 #include "version.h"
 #include "script/scripting_client.h"
 #include "hud.h"
@@ -3642,6 +3643,55 @@ void Game::updateShadows()
 	shadow->getDirectionalLight().updateFrustum(camera, client);
 }
 
+/*
+	Automated screenshot helper (used by the rendering benchmark harness).
+
+	Settings:
+	  bench_screenshot_interval = <seconds> (0 = disabled, default)
+	  bench_screenshot_max = <count>        (default 0)
+	  bench_screenshot_skip = <count>       frames to skip at start (default 0)
+
+	Screenshots are stored in the regular screenshot directory; their names are
+	logged to the action stream so that both the harness and humans can find them.
+*/
+void Game::maybeAutoScreenshot()
+{
+	static bool initialized = false;
+	static float interval = 0.0f;
+	static int max_shots = 0;
+	static int skip_frames = 0;
+	static int taken = 0;
+	static int frame_counter = 0;
+	static u64 next_time = 0;
+
+	if (!initialized) {
+		initialized = true;
+		interval = g_settings->getFloat("bench_screenshot_interval");
+		max_shots = g_settings->getS32("bench_screenshot_max");
+		skip_frames = g_settings->getS32("bench_screenshot_skip");
+		if (interval > 0.0f)
+			next_time = porting::getTimeMs() + (u64)(interval * 1000.0f);
+	}
+
+	if (interval <= 0.0f || taken >= max_shots)
+		return;
+
+	if (frame_counter++ < skip_frames)
+		return;
+
+	u64 now = porting::getTimeMs();
+	if (now < next_time)
+		return;
+	next_time = now + (u64)(interval * 1000.0f);
+	++taken;
+
+	std::string filename;
+	if (takeScreenshot(this->driver, filename))
+		actionstream << "[bench] saved screenshot " << filename << std::endl;
+	else
+		errorstream << "[bench] failed to save screenshot" << std::endl;
+}
+
 void Game::drawScene(ProfilerGraph *graph, RunStats *stats)
 {
 	ZoneScoped;
@@ -3716,6 +3766,7 @@ void Game::drawScene(ProfilerGraph *graph, RunStats *stats)
 	}
 
 	// Must be called immediately before endScene() to capture the rendered frame
+	this->maybeAutoScreenshot();
 	this->client->takeScreenshotIfRequested();
 
 	this->driver->endScene();

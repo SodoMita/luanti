@@ -734,6 +734,12 @@ void ShaderSource::generateShader(ShaderInfo &shaderinfo)
 			vertex_header += "ATTRIBUTE_(8) mediump vec4 inVertexWeights;\n";
 			vertex_header += "ATTRIBUTE_(9) mediump uvec4 inVertexJointIDs;\n";
 		}
+		if (shaderinfo.input_constants.count("USE_INSTANCING") > 0) {
+			vertex_header += "ATTRIBUTE_(10) highp vec4 inInstanceMatrix0;\n";
+			vertex_header += "ATTRIBUTE_(11) highp vec4 inInstanceMatrix1;\n";
+			vertex_header += "ATTRIBUTE_(12) highp vec4 inInstanceMatrix2;\n";
+			vertex_header += "ATTRIBUTE_(13) highp vec4 inInstanceMatrix3;\n";
+		}
 		// GLSL 1.5 is a weird version that doesn't have `layout(location=...)`
 		// but `varying` is already deprecated and replaced by `in`/`out`.
 		if (use_glsl3 || use_glsl15) {
@@ -910,6 +916,8 @@ void ShaderFeatures::setConstants(ShaderConstants &consts) const
 			consts["MAX_JOINTS"] = (int)max_joints;
 		}
 	}
+	if (instancing)
+		consts["USE_INSTANCING"] = 1;
 }
 
 void dumpShaderProgram(std::ostream &os,

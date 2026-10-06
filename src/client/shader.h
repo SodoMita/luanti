@@ -236,6 +236,10 @@ struct ShaderFeatures {
 	/// Joint transforms are expected in the JointMatrices UBO.
 	/// @see irr::video::IVideoDriver::setJointTransforms
 	bool skinning = false;
+	/// Enable hardware instancing support;
+	/// the per-instance transformation is expected in the
+	/// instance matrix vertex attributes.
+	bool instancing = false;
 
 	void setConstants(ShaderConstants &consts) const;
 };
