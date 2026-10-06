@@ -114,8 +114,9 @@ private:
 	 * created once the previous is full), so the newest one is also the first
 	 * one with room. That makes this lookup equivalent to the scan it replaces,
 	 * but O(1) instead of O(buffers). The scan went quadratic exactly where it
-	 * hurts: high-poly mesh nodes produce many full 65535-vertex buffers per
-	 * material, and every append walked past all of them.
+	 * hurts: high-poly mesh nodes produce many full buffers per material (the
+	 * u16 indices cap one at U16_MAX vertices), and every append walked past
+	 * all of them.
 	 *
 	 * Only indices are stored, since the buffer vector grows during collection.
 	 * Nothing here is used once mapblock generation is over, which is also when
