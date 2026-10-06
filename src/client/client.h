@@ -509,13 +509,13 @@ private:
 	ISoundManager *m_sound;
 	MtEventManager *m_event;
 	RenderingEngine *m_rendering_engine;
-	std::unique_ptr<InstancedEntityRenderer> m_entity_batcher;
 	ItemVisualsManager *m_item_visuals_manager;
 
 
 	std::unique_ptr<MeshUpdateManager> m_mesh_update_manager;
 	ClientEnvironment m_env;
 	std::unique_ptr<ParticleManager> m_particle_manager;
+	std::unique_ptr<InstancedEntityRenderer> m_entity_batcher;
 	std::unique_ptr<con::IConnection> m_con;
 	std::string m_address_name;
 	ELoginRegister m_allow_login_or_register = ELoginRegister::Any;
