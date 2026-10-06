@@ -99,6 +99,7 @@ private:
 	Nametag *m_nametag = nullptr;
 	MinimapMarker *m_marker = nullptr;
 	bool m_visuals_expired = false;
+	bool m_batched_rendering_active = false;
 	video::SColor m_last_light = video::SColor(0xFFFFFFFF);
 	bool m_is_visible = false;
 	std::vector<MeshAnimationInfo> m_meshnode_animation;
@@ -288,6 +289,7 @@ public:
 	void updateNodePos();
 
 	void step(float dtime, ClientEnvironment *env) override;
+	void queueForBatchedRendering();
 
 	void updateTextureAnim();
 

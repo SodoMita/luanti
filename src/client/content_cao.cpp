@@ -9,6 +9,7 @@
 #include <ISceneNode.h>
 #include <AnimatedMeshSceneNode.h>
 #include "client/client.h"
+#include "client/instanced_entity_renderer.h"
 #include "client/renderingengine.h"
 #include "client/sound.h"
 #include "client/texturesource.h"
@@ -1208,6 +1209,9 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 		rot_translator.val_current = m_rotation;
 		updateNodePos();
 	}
+
+	// Queue this entity for batched rendering if applicable
+	queueForBatchedRendering();
 }
 
 static void setMeshBufferTextureCoords(scene::IMeshBuffer *buf, const v2f *uv, u32 count)
@@ -2009,3 +2013,84 @@ void GenericCAO::updateMeshCulling()
 
 // Prototype
 static GenericCAO proto_GenericCAO(nullptr, nullptr);
+
+void GenericCAO::queueForBatchedRendering()
+{
+	// Only batch static-mesh visuals: CUBE, NODE, UPRIGHT_SPRITE, and
+	// non-animated MESH. Animated meshes need per-entity skinning so they
+	// stay on the normal Irrlicht scene node path.
+	if (!m_client || !m_is_visible || !m_prop.is_visible)
+		return;
+
+	// Skip if this entity uses animation or is a sprite/wield/node that
+	// we don't batch yet.
+	if (m_animated_meshnode || m_spritenode || m_wield_meshnode)
+		return;
+
+	// Only batch CUBE, NODE, MESH (without animation), UPRIGHT_SPRITE
+	if (m_prop.visual != OBJECTVISUAL_CUBE &&
+			m_prop.visual != OBJECTVISUAL_NODE &&
+			m_prop.visual != OBJECTVISUAL_MESH &&
+			m_prop.visual != OBJECTVISUAL_UPRIGHT_SPRITE)
+		return;
+
+	if (!m_meshnode)
+		return;
+
+	// Get mesh from the scene node
+	scene::IMesh *mesh = m_meshnode->getMesh();
+	if (!mesh)
+		return;
+
+	// Hide the original scene node - we render via the batcher instead.
+	// Only do this once; if the visual changes, addToScene will reset the flag.
+	if (!m_batched_rendering_active) {
+		m_meshnode->setVisible(false);
+		m_batched_rendering_active = true;
+	}
+
+	// Build world transform: translation * rotation * scale
+	core::matrix4 world_xf;
+	world_xf.makeIdentity();
+	v3f rot = m_is_local_player ? -m_rotation : -rot_translator.val_current;
+	if (m_prop.visual != OBJECTVISUAL_UPRIGHT_SPRITE) {
+		setPitchYawRoll(world_xf, rot);
+	}
+	
+	// Apply scale by multiplying columns (X, Y, Z axes)
+	const f32 sx = m_prop.visual_size.X;
+	const f32 sy = m_prop.visual_size.Y;
+	const f32 sz = m_prop.visual_size.Z;
+	world_xf[0] *= sx; world_xf[4] *= sx; world_xf[8] *= sx;
+	world_xf[1] *= sy; world_xf[5] *= sy; world_xf[9] *= sy;
+	world_xf[2] *= sz; world_xf[6] *= sz; world_xf[10] *= sz;
+	
+	// Apply position (already in world space minus camera offset)
+	v3s16 camera_offset = m_env->getCameraOffset();
+	v3f pos = pos_translator.val_current - intToFloat(camera_offset, BS);
+	world_xf.setTranslation(pos);
+	
+	// Apply parent transform if attached
+	if (getParent()) {
+		scene::ISceneNode *parent_node = getParent()->getSceneNode();
+		if (parent_node) {
+			core::matrix4 parent_xf = parent_node->getAbsoluteTransformation();
+			world_xf = parent_xf * world_xf;
+		}
+	}
+
+	InstancedEntityRenderer *batcher = m_client->getEntityBatcher();
+	if (!batcher)
+		return;
+
+	// Use mesh pointer as key (entities sharing the mesh get batched together).
+	// Material is taken from the first meshbuffer; heterogeneous materials are
+	// handled by the batcher's per-material grouping.
+	std::string key = "mesh_" + std::to_string((uintptr_t)mesh);
+	scene::IMeshBuffer *first_buf = mesh->getMeshBufferCount() > 0 ?
+			mesh->getMeshBuffer(0) : nullptr;
+	if (!first_buf)
+		return;
+
+	batcher->queueInstance(mesh, world_xf, first_buf->getMaterial(), key);
+}

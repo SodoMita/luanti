@@ -44,6 +44,7 @@ class NetworkPacket;
 class NodeDefManager;
 class ParticleManager;
 class RenderingEngine;
+class InstancedEntityRenderer;
 class SingleMediaDownloader;
 class ClientScripting;
 class SSCSMController;
@@ -365,6 +366,8 @@ public:
 	Camera* getCamera () { return m_camera; }
 	scene::ISceneManager *getSceneManager();
 
+	InstancedEntityRenderer *getEntityBatcher() { return m_entity_batcher.get(); }
+
 	// IGameDef interface
 	bool isClient() override { return true; }
 	IItemDefManager* getItemDefManager() override;
@@ -506,6 +509,7 @@ private:
 	ISoundManager *m_sound;
 	MtEventManager *m_event;
 	RenderingEngine *m_rendering_engine;
+	std::unique_ptr<InstancedEntityRenderer> m_entity_batcher;
 	ItemVisualsManager *m_item_visuals_manager;
 
 
