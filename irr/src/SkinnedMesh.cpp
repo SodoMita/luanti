@@ -63,6 +63,7 @@ void SkinnedMesh::updateStaticPose()
 		if (auto *weights = buf->getWeights())
 			weights->updateStaticPose(buf->getVertexBuffer());
 	}
+	invalidateSkinnedPose();
 }
 
 void SkinnedMesh::resetAnimation()
@@ -73,6 +74,7 @@ void SkinnedMesh::resetAnimation()
 		if (auto *weights = buf->getWeights())
 			weights->resetToStaticPose(buf->getVertexBuffer());
 	}
+	invalidateSkinnedPose();
 }
 
 // Keyframe Animation
@@ -85,7 +87,9 @@ std::vector<VariantTransform> SkinnedMesh::animateMesh(
 {
 	assert(IsAnimatable);
 
-	std::vector<bool> animated_joints(AllJoints.size(), false);
+	// Scratch, so animating thousands of nodes does not hammer the allocator.
+	std::vector<bool> &animated_joints = ScratchAnimatedJoints;
+	animated_joints.assign(AllJoints.size(), false);
 	std::vector<VariantTransform> result(AllJoints.size());
 	for (const auto &progress : progresses) {
 		const auto &anim = animations.at(progress.track_nr);
@@ -150,10 +154,14 @@ core::aabbox3df SkinnedMesh::calculateBoundingBox(
 
 // Software Skinning
 
-std::vector<core::matrix4> SkinnedMesh::calculateSkinMatrices(const std::vector<core::matrix4> &global_matrices) const
+const std::vector<core::matrix4> &SkinnedMesh::calculateSkinMatrices(
+		const std::vector<core::matrix4> &global_matrices, bool recompute) const
 {
 	assert(global_matrices.size() == AllJoints.size());
-	std::vector<core::matrix4> skin_matrices;
+	std::vector<core::matrix4> &skin_matrices = ScratchSkinMatrices;
+	if (!recompute && skin_matrices.size() == AllJoints.size())
+		return skin_matrices;
+	skin_matrices.clear();
 	skin_matrices.reserve(AllJoints.size());
 	for (u16 i = 0; i < AllJoints.size(); ++i) {
 		auto skin_mat = global_matrices[i];
@@ -182,7 +190,10 @@ void SkinnedMesh::skinMesh(const std::vector<core::matrix4> &global_matrices)
 
 	// Premultiply with global inversed matrices, if present
 	// (which they should be for joints with weights)
-	std::vector<core::matrix4> joint_transforms = global_matrices;
+	// Reusing the scratch buffer avoids a joints * 64 byte allocation per node
+	// per rendered pass.
+	std::vector<core::matrix4> &joint_transforms = ScratchJointTransforms;
+	joint_transforms.assign(global_matrices.begin(), global_matrices.end());
 	for (u16 i = 0; i < AllJoints.size(); ++i) {
 		auto *joint = AllJoints[i];
 		if (joint->GlobalInversedMatrix)
