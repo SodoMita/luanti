@@ -145,16 +145,15 @@ public:
 	// produced the same buffers. The memo records which pose is currently in the
 	// buffers so skinning runs at most once per distinct pose per frame.
 
-	//! Is the buffer content out of date for `pose_key`?
-	bool skinnedPoseStale(u64 pose_key) const
+	//! Make `pose_key` current and report whether shared mesh data must be refreshed.
+	//! Call this immediately before rendering, because scene nodes animate before
+	//! any of them render and another node may have made a different pose current.
+	bool activateSkinnedPose(u64 pose_key, bool force = false)
 	{
-		return !SkinnedPoseValid || SkinnedPoseKey != pose_key;
-	}
-	//! Record that the buffers now hold `pose_key`.
-	void commitSkinnedPose(u64 pose_key)
-	{
+		const bool stale = force || !SkinnedPoseValid || SkinnedPoseKey != pose_key;
 		SkinnedPoseKey = pose_key;
 		SkinnedPoseValid = true;
+		return stale;
 	}
 	//! Must be called whenever the vertex data is replaced from the outside.
 	void invalidateSkinnedPose() { SkinnedPoseValid = false; }

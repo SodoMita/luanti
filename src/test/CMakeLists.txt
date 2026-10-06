@@ -14,5 +14,6 @@ set(test_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/test_k_d_tree.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_nodedef.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_serveractiveobjectmgr.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/test_skinned_mesh_pose.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/test_translations.cpp
 	PARENT_SCOPE)

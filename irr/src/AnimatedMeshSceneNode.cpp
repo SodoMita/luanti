@@ -181,12 +181,10 @@ void AnimatedMeshSceneNode::render()
 		// skin-matrix scratch buffer all live on the shared mesh. Their pose must
 		// therefore be checked in render order, not animation traversal order.
 		// local_pose_stale also keeps unhashable raw-matrix joints conservative.
-		const bool shared_pose_stale = local_pose_stale ||
-				Skinned->skinnedPoseStale(PoseKey);
-		if (shared_pose_stale) {
+		const bool shared_pose_stale = Skinned->activateSkinnedPose(
+				PoseKey, local_pose_stale);
+		if (shared_pose_stale)
 			Skinned->rigidAnimation(PerJoint.GlobalMatrices);
-			Skinned->commitSkinnedPose(PoseKey);
-		}
 		PoseStale = false;
 
 		if (Skinned->useSoftwareSkinning()) {
