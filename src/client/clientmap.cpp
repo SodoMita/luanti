@@ -902,7 +902,11 @@ static u32 transformBuffersToDrawOrder(
 	}
 
 	// iterate in reverse to get closest blocks first
-	std::vector<std::pair<v3f, scene::IMeshBuffer*>> to_merge;
+	// Both containers are only scratch for this call. This runs once per
+	// material group per frame, so letting them keep their capacity across
+	// calls removes a lot of per-frame heap churn.
+	static thread_local std::vector<std::pair<v3f, scene::IMeshBuffer*>> to_merge;
+	to_merge.clear();
 	for (auto it = src.rbegin(); it != src.rend(); ++it) {
 		v3f translate = get_world_pos(it->first);
 		auto *buf = it->second;
@@ -926,7 +930,8 @@ static u32 transformBuffersToDrawOrder(
 		return static_cast<void*>(l.second) < static_cast<void*>(r.second);
 	});
 	// cache key is a string of sorted raw pointers
-	std::string key;
+	static thread_local std::string key;
+	key.clear();
 	key.reserve(sizeof(void*) * to_merge.size());
 	for (auto &it : to_merge)
 		key.append(reinterpret_cast<const char*>(&it.second), sizeof(void*));
