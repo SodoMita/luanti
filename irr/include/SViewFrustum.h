@@ -164,8 +164,17 @@ inline SViewFrustum::SViewFrustum(const core::matrix4 &mat, bool zClipFromZero)
 
 inline void SViewFrustum::transform(const core::matrix4 &mat)
 {
-	for (u32 i = 0; i < VF_PLANE_COUNT; ++i)
-		mat.transformPlane(planes[i]);
+	// Transforming a plane needs the inverse transpose of the matrix
+	// (CMatrix4::transformPlane()). transform() is always called with a single
+	// matrix for all six planes, so hoist that inverse transpose out of the
+	// loop instead of recomputing it, bit identically, once per plane.
+	const core::matrix4 normalMat(mat, core::matrix4::EM4CONST_INVERSE_TRANSPOSED);
+	for (u32 i = 0; i < VF_PLANE_COUNT; ++i) {
+		core::vector3df member;
+		mat.transformVect(member, planes[i].getMemberPoint());
+		core::vector3df normal = normalMat.rotateAndScaleVect(planes[i].Normal);
+		planes[i].setPlane(member, normal.normalize());
+	}
 
 	mat.transformVect(cameraPosition);
 	recalculateBoundingBox();
