@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
+#include <array>
 #include <cmath>
 #include "content_mapblock.h"
 #include "util/basic_macros.h"
@@ -1914,7 +1915,6 @@ void MapblockMeshGenerator::drawNodeboxNode()
 void MapblockMeshGenerator::drawMeshNode()
 {
 	u8 facedir = 0;
-	scene::IMesh* mesh;
 	int degrotate = 0;
 
 	if (cur_node.f->param_type_2 == CPT2_FACEDIR ||
@@ -1932,25 +1932,70 @@ void MapblockMeshGenerator::drawMeshNode()
 		degrotate = cur_node.n.getDegRotate(nodedef);
 	}
 
-	auto *mesh_ptr = cur_node.f->visuals->mesh_ptr;
-	if (mesh_ptr) {
-		// clone and rotate mesh
-		mesh = cloneStaticMesh(mesh_ptr);
-		bool modified = true;
-		if (facedir)
-			rotateMeshBy6dFacedir(mesh, facedir);
-		else if (degrotate)
-			rotateMeshXZby(mesh, 1.5f * degrotate);
-		else
-			modified = false;
-		if (modified) {
-			recalculateBoundingBox(mesh);
-		}
-	} else {
+	auto *mesh = cur_node.f->visuals->mesh_ptr;
+	if (!mesh) {
 		warningstream << "drawMeshNode(): missing mesh" << std::endl;
 		return;
 	}
 
+	// Keep rotations as a tiny per-node transform and apply them while copying
+	// into the block collector. Cloning an SMesh for every placed mesh node made
+	// this path allocate/copy all of a high-poly model just to rotate it once.
+	struct RotationStep {
+		enum Axis : u8 { XY, XZ, YZ } axis;
+		f32 c;
+		f32 s;
+	};
+	std::array<RotationStep, 2> rotations;
+	u32 rotation_count = 0;
+	auto addRotation = [&] (RotationStep::Axis axis, f32 degrees) {
+		const f32 radians = degrees * static_cast<f32>(M_PI) / 180.0f;
+		rotations[rotation_count++] = {axis, std::cos(radians), std::sin(radians)};
+	};
+
+	u8 axisdir = facedir >> 2;
+	facedir &= 0x03;
+	switch (facedir) {
+		case 1: addRotation(RotationStep::XZ, -90); break;
+		case 2: addRotation(RotationStep::XZ, 180); break;
+		case 3: addRotation(RotationStep::XZ, 90); break;
+	}
+	switch (axisdir) {
+		case 1: addRotation(RotationStep::YZ, 90); break; // z+
+		case 2: addRotation(RotationStep::YZ, -90); break; // z-
+		case 3: addRotation(RotationStep::XY, -90); break; // x+
+		case 4: addRotation(RotationStep::XY, 90); break; // x-
+		case 5: addRotation(RotationStep::XY, -180); break;
+	}
+	if (rotation_count == 0 && degrotate)
+		addRotation(RotationStep::XZ, 1.5f * degrotate);
+
+	auto rotate = [&] (v3f &v) {
+		for (u32 i = 0; i < rotation_count; ++i) {
+			const auto &step = rotations[i];
+			f32 a, b;
+			switch (step.axis) {
+			case RotationStep::XY:
+				a = v.X; b = v.Y;
+				v.X = step.c * a - step.s * b;
+				v.Y = step.s * a + step.c * b;
+				break;
+			case RotationStep::XZ:
+				a = v.X; b = v.Z;
+				v.X = step.c * a - step.s * b;
+				v.Z = step.s * a + step.c * b;
+				break;
+			case RotationStep::YZ:
+				a = v.Y; b = v.Z;
+				v.Y = step.c * a - step.s * b;
+				v.Z = step.s * a + step.c * b;
+				break;
+			}
+		}
+	};
+
+	// Reuse per-thread storage across all mesh nodes handled by this generator.
+	static thread_local std::vector<video::S3DVertex> vertices;
 	for (u32 j = 0; j < mesh->getMeshBufferCount(); j++) {
 		// Only up to 6 tiles are supported
 		const u32 tile_idx = mesh->getTextureSlot(j);
@@ -1958,32 +2003,31 @@ void MapblockMeshGenerator::drawMeshNode()
 		useTile(&tile, MYMIN(tile_idx, 5));
 
 		scene::IMeshBuffer *buf = mesh->getMeshBuffer(j);
-		video::S3DVertex *vertices = (video::S3DVertex *)buf->getVertices();
-		u32 vertex_count = buf->getVertexCount();
+		const auto *source = static_cast<const video::S3DVertex *>(buf->getVertices());
+		const u32 vertex_count = buf->getVertexCount();
+		vertices.resize(vertex_count);
 
-		// Mesh is always private here. So the lighting is applied to each
-		// vertex right here.
-		if (data->m_smooth_lighting) {
-			for (u32 k = 0; k < vertex_count; k++) {
-				video::S3DVertex &vertex = vertices[k];
+		// The mesh is shared and immutable. Apply orientation, lighting and block
+		// translation only to the reusable scratch copy.
+		for (u32 k = 0; k < vertex_count; k++) {
+			video::S3DVertex vertex = source[k];
+			rotate(vertex.Pos);
+			rotate(vertex.Normal);
+			if (data->m_smooth_lighting) {
 				vertex.Color = blendLightColor(vertex.Pos, vertex.Normal);
-				vertex.Pos += cur_node.origin;
-			}
-		} else {
-			bool is_light_source = cur_node.f->light_source != 0;
-			for (u32 k = 0; k < vertex_count; k++) {
-				video::S3DVertex &vertex = vertices[k];
+			} else {
 				video::SColor color = cur_node.lcolor;
-				if (!is_light_source)
+				if (!cur_node.f->light_source)
 					applyFacesShading(color, vertex.Normal);
 				vertex.Color = color;
-				vertex.Pos += cur_node.origin;
 			}
+			vertex.Pos += cur_node.origin;
+			vertices[k] = vertex;
 		}
-		collector->append(tile, vertices, vertex_count,
-			buf->getIndices(), buf->getIndexCount());
+
+		collector->append(tile, vertices.data(), vertex_count,
+				buf->getIndices(), buf->getIndexCount());
 	}
-	mesh->drop();
 }
 
 // also called when the drawtype is known but should have been pre-converted
