@@ -2100,6 +2100,14 @@ scene::IAnimatedMesh *Client::getMesh(const std::string &filename, bool *is_shar
 	rfile->drop();
 	if (!mesh)
 		return nullptr;
+
+	// Mesh entities are usually drawn many times per frame. Keeping their
+	// vertex/index data in VRAM avoids uploading it on every draw call, which
+	// is what happens for buffers without a mapping hint.
+	// (Dynamically modified buffers are already marked as such by their users,
+	// e.g. useSwSkinning and the wield mesh.)
+	mesh->setHardwareMappingHint(scene::EHM_STATIC);
+
 	mesh->grab();
 	return mesh;
 }

@@ -266,6 +266,33 @@ public:
 			mb->getPrimitiveCount(), mb->getPrimitiveType());
 	}
 
+	//! Fallback for drivers without hardware instancing:
+	//! draw the instances one by one with the world transformation set
+	void drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
+			const f32 *instanceMatrices, u32 instanceCount) override
+	{
+		if (!mb || !instanceMatrices)
+			return;
+
+		const core::matrix4 world = getTransform(ETS_WORLD);
+		for (u32 i = 0; i < instanceCount; i++) {
+			core::matrix4 inst(instanceMatrices + 16 * i, core::EM4CONST_COPY);
+			setTransform(ETS_WORLD, world * inst);
+			drawMeshBuffer(mb);
+		}
+		setTransform(ETS_WORLD, world);
+	}
+
+	bool queryInstancingSupport() const override
+	{
+		return false;
+	}
+
+	bool canDrawInstanced(const scene::IMeshBuffer *mb) override
+	{
+		return false;
+	}
+
 	// Note: this should handle hw buffers
 	virtual void drawBuffers(const scene::IVertexBuffer *vb,
 		const scene::IIndexBuffer *ib, u32 primCount,

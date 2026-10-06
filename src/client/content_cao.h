@@ -92,6 +92,8 @@ private:
 
 	// Visuals
 	scene::IMeshSceneNode *m_meshnode = nullptr;
+	// Set for objects whose mesh is drawn in a batch (no own scene node)
+	scene::IAnimatedMesh *m_batch_mesh = nullptr;
 	scene::AnimatedMeshSceneNode *m_animated_meshnode = nullptr;
 	WieldMeshSceneNode *m_wield_meshnode = nullptr;
 	scene::IBillboardSceneNode *m_spritenode = nullptr;
@@ -106,6 +108,11 @@ private:
 
 	// Material
 	video::E_MATERIAL_TYPE m_material_type = video::EMT_INVALID;
+
+	// Batching helpers (see meshbatch.h)
+	bool canBeBatched(scene::IAnimatedMesh *mesh) const;
+	static void ensureMeshVertexColorWhite(scene::IAnimatedMesh *mesh);
+	void addToBatchIfEnabled();
 
 	// Movement
 	v3f m_position = v3f(0.0f, 10.0f * BS, 0);

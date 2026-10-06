@@ -17,6 +17,7 @@
 
 class ClientSimpleObject;
 class ClientMap;
+class MeshBatchDrawer;
 class ClientScripting;
 class ClientActiveObject;
 class GenericCAO;
@@ -78,6 +79,9 @@ public:
 	*/
 
 	GenericCAO* getGenericCAO(u16 id);
+
+	/// Draws batched entity meshes (see meshbatch.h)
+	MeshBatchDrawer *getMeshBatchDrawer() const { return m_mesh_batcher.get(); }
 	ClientActiveObject* getActiveObject(u16 id)
 	{
 		return m_ao_manager.getActiveObject(id);
@@ -139,6 +143,7 @@ public:
 
 private:
 	irr_ptr<ClientMap> m_map;
+	irr_ptr<MeshBatchDrawer> m_mesh_batcher;
 	LocalPlayer *m_local_player = nullptr;
 	ITextureSource *m_texturesource;
 	Client *m_client;
