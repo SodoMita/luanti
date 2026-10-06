@@ -342,20 +342,23 @@ bool CSceneManager::isCulled(const ISceneNode *node) const
 
 	// can be seen by cam pyramid planes ?
 	if (!result && (node->getAutomaticCulling() & scene::EAC_FRUSTUM_BOX)) {
-		SViewFrustum frust = *cam->getViewFrustum();
-
-		// transform the frustum to the node's current absolute transformation
-		core::matrix4 invTrans(node->getAbsoluteTransformation(), core::matrix4::EM4CONST_INVERSE);
-		// invTrans.makeInverse();
-		frust.transform(invTrans);
-
 		core::vector3df edges[8];
 		node->getBoundingBox().getEdges(edges);
 
+		// Test in world space instead of transforming the frustum into node space.
+		// SViewFrustum::transform() transforms six planes, and transforming each
+		// plane calculates an inverse-transpose matrix. That made culling perform
+		// seven matrix inversions for every registered node. Eight point transforms
+		// are both cheaper and mathematically equivalent for affine transforms.
+		const core::matrix4 &transform = node->getAbsoluteTransformation();
+		for (auto &edge : edges)
+			transform.transformVect(edge);
+
+		const SViewFrustum *frust = cam->getViewFrustum();
 		for (s32 i = 0; i < scene::SViewFrustum::VF_PLANE_COUNT; ++i) {
 			bool boxInFrustum = false;
 			for (u32 j = 0; j < 8; ++j) {
-				if (frust.planes[i].classifyPointRelation(edges[j]) != core::ISREL3D_FRONT) {
+				if (frust->planes[i].classifyPointRelation(edges[j]) != core::ISREL3D_FRONT) {
 					boxInFrustum = true;
 					break;
 				}
