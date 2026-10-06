@@ -745,6 +745,32 @@ public:
 	/** \param mb Buffer to draw */
 	virtual void drawMeshBuffer(const scene::IMeshBuffer *mb) = 0;
 
+	//! Draws one mesh buffer multiple times with different transformations
+	/**
+	 * This is hardware instancing: the transformation of every instance is
+	 * passed to the vertex shader through vertex attributes, so the whole
+	 * batch is drawn with a single draw call. The vertex shader must support
+	 * this, i.e. it has to be built with the USE_INSTANCING constant.
+	 *
+	 * A driver that does not support instancing falls back to drawing the
+	 * instances one by one, which is still correct, just slower.
+	 *
+	 * \param mb Buffer to draw, vertex and index data should be in VRAM
+	 * \param instanceMatrices instanceCount matrices (4x4 floats, row-major,
+	 *        as in core::matrix4) applied before the world transformation
+	 * \param instanceCount number of instances to draw
+	 */
+	virtual void drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
+			const f32 *instanceMatrices, u32 instanceCount) = 0;
+
+	//! Whether drawMeshBufferInstanced() uses real hardware instancing
+	virtual bool queryInstancingSupport() const = 0;
+
+	//! Whether the given mesh buffer can be drawn with hardware instancing
+	/** Note that drawMeshBufferInstanced() works for any mesh buffer, this
+	only tells whether that would be efficient (i.e. actually instanced). */
+	virtual bool canDrawInstanced(const scene::IMeshBuffer *mb) = 0;
+
 	/**
 	 * Draws a mesh from individual vertex and index buffers.
 	 * @param vb vertices to use

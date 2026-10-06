@@ -95,6 +95,14 @@ float directional_ambient(vec3 normal)
 	return dot(v, vec3(0.670820, 1.000000, 0.836660));
 }
 
+// World matrix of the currently drawn object. With instancing this is
+// composed from the uniform world matrix and the per-instance matrix.
+#ifdef USE_INSTANCING
+	#define WORLD_MATRIX (mWorld * mat4(inInstanceMatrix0, inInstanceMatrix1, inInstanceMatrix2, inInstanceMatrix3))
+#else
+	#define WORLD_MATRIX mWorld
+#endif
+
 void main(void)
 {
 #ifdef USE_SKINNING
@@ -124,8 +132,8 @@ void main(void)
 
 	gl_Position = mWorldViewProj * skinPos;
 
-	vNormal = (mWorld * vec4(skinNormal, 0.0)).xyz;
-	worldPosition = (mWorld * skinPos).xyz;
+	vNormal = (WORLD_MATRIX * vec4(skinNormal, 0.0)).xyz;
+	worldPosition = (WORLD_MATRIX * skinPos).xyz;
 	eyeVec = -(mWorldView * skinPos).xyz;
 
 #if (MATERIAL_TYPE == TILE_MATERIAL_PLAIN) || (MATERIAL_TYPE == TILE_MATERIAL_PLAIN_ALPHA)

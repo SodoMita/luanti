@@ -170,11 +170,20 @@ COpenGL3DriverBase::COpenGL3DriverBase(const SIrrlichtCreationParameters &params
 	ContextManager->activateContext(ExposedData, false);
 	GL.LoadAllProcedures(ContextManager);
 
+	// VAOs are available since OpenGL 3.0 (and OpenGL ES 3.0)
+	UseVAOCache = (GL.BindVertexArray != nullptr) && (GL.GenVertexArrays != nullptr);
+	UseInstancing = (GL.DrawElementsInstanced != nullptr) && (GL.VertexAttribDivisor != nullptr);
+
 	TEST_GL_ERROR(this);
 }
 
 COpenGL3DriverBase::~COpenGL3DriverBase()
 {
+	if (ContextManager) {
+		clearVAOCache();
+		InstanceMatrixVBO.destroy();
+	}
+
 	QuadIndexVBO.destroy();
 	JointTransformsUBO.destroy();
 
@@ -567,7 +576,73 @@ void COpenGL3DriverBase::deleteHardwareBuffer(SHWBufferLink *HWBuffer)
 	auto *b = static_cast<SHWBufferLink_opengl *>(HWBuffer);
 	b->Vbo.destroy();
 
+	// GL reuses buffer names, so VAOs referencing this buffer must be dropped
+	clearVAOCache();
+
 	CNullDriver::deleteHardwareBuffer(HWBuffer);
+}
+
+GLuint COpenGL3DriverBase::getVAO(GLuint vb, GLuint ib, E_VERTEX_TYPE vType)
+{
+	if (!UseVAOCache || !vb || !ib)
+		return 0;
+
+	const SVAOKey key{vb, ib, vType};
+	auto it = VAOCache.find(key);
+	if (it != VAOCache.end())
+		return it->second;
+
+	const VertexType &vertexType = getVertexTypeDescription(vType);
+
+	GLuint vao = 0;
+	GL.GenVertexArrays(1, &vao);
+	if (!vao)
+		return 0;
+
+	GL.BindVertexArray(vao);
+	GL.BindBuffer(GL_ARRAY_BUFFER, vb);
+	GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, ib);
+
+	for (auto &attr : vertexType) {
+		if (attr.mode == VertexAttribute::Mode::Integer && Version.Major < 3)
+			continue;
+
+		GL.EnableVertexAttribArray(attr.Index);
+		switch (attr.mode) {
+		case VertexAttribute::Mode::Regular:
+			GL.VertexAttribPointer(attr.Index, attr.ComponentCount, attr.ComponentType,
+				GL_FALSE, vertexType.VertexSize, reinterpret_cast<void *>(attr.Offset));
+			break;
+		case VertexAttribute::Mode::Normalized:
+			GL.VertexAttribPointer(attr.Index, attr.ComponentCount, attr.ComponentType,
+				GL_TRUE, vertexType.VertexSize, reinterpret_cast<void *>(attr.Offset));
+			break;
+		case VertexAttribute::Mode::Integer:
+			GL.VertexAttribIPointer(attr.Index, attr.ComponentCount, attr.ComponentType,
+				vertexType.VertexSize, reinterpret_cast<void *>(attr.Offset));
+			break;
+		}
+	}
+
+	// Note: the element array buffer binding is part of the VAO state,
+	// so the bindings above must be reset through the default VAO.
+	GL.BindVertexArray(0);
+	GL.BindBuffer(GL_ARRAY_BUFFER, 0);
+	GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+
+	VAOCache.emplace(key, vao);
+	return vao;
+}
+
+void COpenGL3DriverBase::clearVAOCache()
+{
+	if (VAOCache.empty())
+		return;
+
+	GL.BindVertexArray(0);
+	for (auto &it : VAOCache)
+		GL.DeleteVertexArrays(1, &it.second);
+	VAOCache.clear();
 }
 
 void COpenGL3DriverBase::drawBuffers(const scene::IVertexBuffer *vb,
@@ -589,6 +664,23 @@ void COpenGL3DriverBase::drawBuffers(const scene::IVertexBuffer *vb,
 	auto *hwidx = static_cast<SHWBufferLink_opengl *>(getBufferLink(ib));
 	updateHardwareBuffer(hwvert);
 	updateHardwareBuffer(hwidx);
+
+	// Fast path: with both buffers in VRAM and no skinning weights, the entire
+	// attribute setup can live in a cached VAO. This removes ~10 GL calls per
+	// draw call, which dominates the cost of drawing many small mesh buffers.
+	if (hwvert && hwidx && !hw_weights && UseVAOCache &&
+			(PrimitiveType == scene::EPT_TRIANGLES || PrimitiveType == scene::EPT_TRIANGLE_STRIP ||
+			PrimitiveType == scene::EPT_TRIANGLE_FAN || PrimitiveType == scene::EPT_LINES ||
+			PrimitiveType == scene::EPT_LINE_STRIP || PrimitiveType == scene::EPT_LINE_LOOP)) {
+		GLuint vao = getVAO(hwvert->Vbo.getName(), hwidx->Vbo.getName(), vb->getType());
+		if (vao) {
+			PendingVAO = vao;
+			drawVertexPrimitiveList(nullptr, vb->getCount(), nullptr,
+				PrimitiveCount, vb->getType(), PrimitiveType, ib->getType());
+			PendingVAO = 0;
+			return;
+		}
+	}
 
 	if (hw_weights) {
 		// Bind the weight & joint ID VBOs
@@ -629,6 +721,92 @@ void COpenGL3DriverBase::drawBuffers(const scene::IVertexBuffer *vb,
 		GL.BindBuffer(GL_ARRAY_BUFFER, 0);
 	if (hwidx)
 		GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+//! Draws a mesh buffer once per instance with hardware instancing
+void COpenGL3DriverBase::drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
+		const f32 *instanceMatrices, u32 instanceCount)
+{
+	if (!mb || !instanceMatrices || !instanceCount)
+		return;
+
+	const auto *vb = mb->getVertexBuffer();
+	const auto *ib = mb->getIndexBuffer();
+	if (!vb || !ib) {
+		CNullDriver::drawMeshBufferInstanced(mb, instanceMatrices, instanceCount);
+		return;
+	}
+
+	// Hardware instancing requires both buffers in VRAM
+	auto *hwvert = UseInstancing ? static_cast<SHWBufferLink_opengl *>(getBufferLink(vb)) : nullptr;
+	auto *hwidx = UseInstancing ? static_cast<SHWBufferLink_opengl *>(getBufferLink(ib)) : nullptr;
+	if (!hwvert || !hwidx) {
+		// Fall back to one draw call per instance
+		CNullDriver::drawMeshBufferInstanced(mb, instanceMatrices, instanceCount);
+		return;
+	}
+	updateHardwareBuffer(hwvert);
+	updateHardwareBuffer(hwidx);
+
+	// 16-bit indices are all that mesh buffers use
+	if (ib->getType() != scene::EIT_16BIT || mb->getPrimitiveType() != scene::EPT_TRIANGLES) {
+		CNullDriver::drawMeshBufferInstanced(mb, instanceMatrices, instanceCount);
+		return;
+	}
+
+	const size_t matrix_size = sizeof(f32) * 16;
+	InstanceMatrixVBO.upload(instanceMatrices, matrix_size * instanceCount, 0, GL_STREAM_DRAW);
+	if (!InstanceMatrixVBO.exists()) {
+		CNullDriver::drawMeshBufferInstanced(mb, instanceMatrices, instanceCount);
+		return;
+	}
+
+	// Statistics: one draw call, but the primitives of all instances
+	FrameStats.Drawcalls++;
+	FrameStats.PrimitivesDrawn += mb->getPrimitiveCount() * instanceCount;
+
+	setRenderStates3DMode();
+
+	const VertexType &vertexType = getVertexTypeDescription(vb->getType());
+	GL.BindBuffer(GL_ARRAY_BUFFER, hwvert->Vbo.getName());
+	beginDraw(vertexType, 0);
+
+	GL.BindBuffer(GL_ARRAY_BUFFER, InstanceMatrixVBO.getName());
+	for (u32 i = 0; i < 4; i++) {
+		const GLuint attr = EVA_INSTANCE_MATRIX + i;
+		GL.EnableVertexAttribArray(attr);
+		GL.VertexAttribPointer(attr, 4, GL_FLOAT, GL_FALSE, matrix_size,
+			reinterpret_cast<void *>(i * sizeof(f32) * 4));
+		GL.VertexAttribDivisor(attr, 1);
+	}
+	GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, hwidx->Vbo.getName());
+
+	GL.DrawElementsInstanced(GL_TRIANGLES, mb->getPrimitiveCount() * 3,
+		GL_UNSIGNED_SHORT, nullptr, instanceCount);
+
+	for (u32 i = 0; i < 4; i++) {
+		const GLuint attr = EVA_INSTANCE_MATRIX + i;
+		GL.VertexAttribDivisor(attr, 0);
+		GL.DisableVertexAttribArray(attr);
+	}
+
+	endDraw(vertexType);
+	GL.BindBuffer(GL_ARRAY_BUFFER, 0);
+	GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+}
+
+// Whether the given mesh buffer can be drawn with drawMeshBufferInstanced()
+bool COpenGL3DriverBase::canDrawInstanced(const scene::IMeshBuffer *mb)
+{
+	if (!UseInstancing || !mb || !mb->getVertexBuffer() || !mb->getIndexBuffer())
+		return false;
+	if (mb->getPrimitiveType() != scene::EPT_TRIANGLES)
+		return false;
+	if (mb->getIndexBuffer()->getType() != scene::EIT_16BIT)
+		return false;
+	// Both buffers must be in VRAM (and stay there, i.e. not EHM_NEVER)
+	return getBufferLink(mb->getVertexBuffer()) != nullptr &&
+		getBufferLink(mb->getIndexBuffer()) != nullptr;
 }
 
 IRenderTarget *COpenGL3DriverBase::addRenderTarget()
@@ -1001,7 +1179,12 @@ void COpenGL3DriverBase::drawGeneric(const void *vertices, const void *indexList
 		E_VERTEX_TYPE vType, scene::E_PRIMITIVE_TYPE pType, E_INDEX_TYPE iType)
 {
 	auto &vTypeDesc = getVertexTypeDescription(vType);
-	beginDraw(vTypeDesc, reinterpret_cast<uintptr_t>(vertices));
+	// With a cached VAO the attribute state is already in place
+	const bool use_vao = (PendingVAO != 0);
+	if (use_vao)
+		GL.BindVertexArray(PendingVAO);
+	else
+		beginDraw(vTypeDesc, reinterpret_cast<uintptr_t>(vertices));
 	GLenum indexSize = 0;
 
 	switch (iType) {
@@ -1040,7 +1223,10 @@ void COpenGL3DriverBase::drawGeneric(const void *vertices, const void *indexList
 		break;
 	}
 
-	endDraw(vTypeDesc);
+	if (use_vao)
+		GL.BindVertexArray(0);
+	else
+		endDraw(vTypeDesc);
 }
 
 void COpenGL3DriverBase::beginDraw(const VertexType &vertexType, uintptr_t verticesBase)

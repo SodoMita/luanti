@@ -3,6 +3,7 @@
 // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "content_cao.h"
+#include "meshbatch.h"
 #include <IBillboardSceneNode.h>
 #include <ICameraSceneNode.h>
 #include <IMeshManipulator.h>
@@ -389,8 +390,105 @@ bool GenericCAO::isImmortal() const
 	return itemgroup_get(getGroups(), "immortal");
 }
 
+/*
+	Batched rendering of static mesh objects.
+	See meshbatch.h for the rationale.
+*/
+
+bool GenericCAO::canBeBatched(scene::IAnimatedMesh *mesh) const
+{
+	if (!mesh)
+		return false;
+
+	auto *drawer = m_env ? m_env->getMeshBatchDrawer() : nullptr;
+	if (!drawer || !drawer->isEnabled())
+		return false;
+
+	// Only top-level objects without attachments or a wielded item, otherwise
+	// the scene graph hierarchy has to be used for them.
+	if (getParent() || !m_attachment_child_ids.empty() ||
+			!m_prop.wield_item.empty() || m_is_local_player)
+		return false;
+
+	// The mesh must be static: no skeletal animation and no animation frames
+	if (mesh->getMeshType() != scene::EAMT_STATIC || mesh->getFrameCount() > 1)
+		return false;
+	if (mesh->needsHwSkinning())
+		return false;
+
+	// Objects that use texture animations would need a draw call per frame
+	// anyway, and nodes with multiple texture layers are not supported.
+	for (u32 i = 0; i < mesh->getMeshBufferCount(); i++) {
+		scene::IMeshBuffer *buf = mesh->getMeshBuffer(i);
+		if (!buf)
+			continue;
+		if (buf->getMaterial().getTexture(2))
+			return false;
+	}
+
+	return true;
+}
+
+void GenericCAO::ensureMeshVertexColorWhite(scene::IAnimatedMesh *mesh)
+{
+	// The code below is equivalent to setMeshColor(mesh, white), but it avoids
+	// marking the buffers as changed (and thus re-uploading them to the GPU)
+	// when they already have the right color.
+	for (u32 i = 0; i < mesh->getMeshBufferCount(); i++) {
+		scene::IMeshBuffer *buf = mesh->getMeshBuffer(i);
+		if (!buf)
+			continue;
+
+		const video::S3DVertex *vertices =
+				static_cast<const video::S3DVertex *>(buf->getVertices());
+		const u32 count = buf->getVertexCount();
+		bool ok = true;
+		for (u32 j = 0; j < count; j++) {
+			if (vertices[j].Color.color != 0xFFFFFFFFu) {
+				ok = false;
+				break;
+			}
+		}
+		if (!ok)
+			setMeshBufferColor(buf, video::SColor(0xFFFFFFFF));
+	}
+}
+
+void GenericCAO::addToBatchIfEnabled()
+{
+	if (!m_batch_mesh || !m_is_visible || !m_env)
+		return;
+
+	auto *drawer = m_env->getMeshBatchDrawer();
+	if (!drawer || !drawer->isEnabled())
+		return;
+
+	MeshBatchDrawer::MaterialOverride ov;
+	ov.material_type = m_material_type;
+	ov.set_backface_culling = true;
+	ov.backface_culling = m_prop.backface_culling;
+
+	// The dummy transformation node holds the camera-relative transformation,
+	// the objects' visual size is applied on top of it (as the scene node
+	// hierarchy would do).
+	core::matrix4 m = getPosRotMatrix();
+	if (m_prop.visual_size != v3f(1.0f)) {
+		core::matrix4 scale;
+		scale.setScale(m_prop.visual_size);
+		m *= scale;
+	}
+
+	drawer->add(m_batch_mesh, m, ov);
+}
+
 scene::ISceneNode *GenericCAO::getSceneNode() const
 {
+	// Batched objects have no render node of their own, but the dummy
+	// transformation node carries their transformation (used for nametags,
+	// minimap markers and the selection box).
+	if (m_batch_mesh)
+		return m_matrixnode;
+
 	if (m_meshnode) {
 		return m_meshnode;
 	}
@@ -539,6 +637,11 @@ void GenericCAO::removeFromScene(bool permanent)
 	if (auto shadow = RenderingEngine::get_shadow_renderer())
 		if (auto node = getSceneNode())
 			shadow->removeNodeFromShadowList(node);
+
+	if (m_batch_mesh) {
+		m_batch_mesh->drop();
+		m_batch_mesh = nullptr;
+	}
 
 	if (m_meshnode) {
 		m_meshnode->remove();
@@ -705,7 +808,16 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 						recalculateNormals(mesh, true, false);
 			}
 
-			m_animated_meshnode = m_smgr->addAnimatedMeshSceneNode(mesh, m_matrixnode);
+			// Static meshes are drawn in batches with a single instanced draw call
+		// per mesh instead of one draw call per object (see meshbatch.h)
+		if (canBeBatched(mesh)) {
+			ensureMeshVertexColorWhite(mesh);
+			m_batch_mesh = mesh;
+			m_batch_mesh->grab();
+			break;
+		}
+
+		m_animated_meshnode = m_smgr->addAnimatedMeshSceneNode(mesh, m_matrixnode);
 			m_animated_meshnode->grab();
 			mesh->drop(); // The scene node took hold of it
 			m_animated_meshnode->setScale(m_prop.visual_size);
@@ -1140,6 +1252,7 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 		}
 		pos_translator.translate(dtime);
 		updateNodePos();
+		addToBatchIfEnabled();
 
 		float moved = lastpos.getDistanceFrom(pos_translator.val_current);
 		m_step_distance_counter += moved;

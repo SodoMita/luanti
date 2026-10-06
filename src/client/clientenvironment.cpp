@@ -19,6 +19,7 @@
 #include "voxelalgorithms.h"
 #include "settings.h"
 #include "content_cao.h"
+#include "meshbatch.h"
 #include "porting.h"
 #include "client/renderingengine.h"
 
@@ -33,6 +34,14 @@ ClientEnvironment::ClientEnvironment(irr_ptr<ClientMap> map,
 	m_texturesource(texturesource),
 	m_client(client)
 {
+	// The batch drawer needs the scene manager of the rendering engine
+	auto *smgr = m_client->getSceneManager();
+	if (smgr) {
+		// Note: the scene node is managed by the scene manager (its parent),
+		// hence the use of grab() here.
+		m_mesh_batcher = grab(new MeshBatchDrawer(smgr->getRootSceneNode(), smgr,
+			smgr->getVideoDriver(), m_client->getShaderSource()));
+	}
 }
 
 ClientEnvironment::~ClientEnvironment()
@@ -41,6 +50,12 @@ ClientEnvironment::~ClientEnvironment()
 
 	for (auto &simple_object : m_simple_objects) {
 		delete simple_object;
+	}
+
+	// The batch drawer is a scene node, it must be removed from the scene graph
+	if (m_mesh_batcher) {
+		m_mesh_batcher->remove();
+		m_mesh_batcher.reset();
 	}
 
 	m_map.reset();
