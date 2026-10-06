@@ -66,7 +66,11 @@ public:
 	//! by multiplying with respective parent matrices.
 	void calculateGlobalMatrices(std::vector<core::matrix4> &matrices) const;
 
-	std::vector<core::matrix4> calculateSkinMatrices(const std::vector<core::matrix4> &global_matrices) const;
+	//! Turns the given global matrices into skin matrices.
+	//! The result is kept in a scratch buffer; set `recompute` to false to keep
+	//! the previously computed matrices (they only depend on the pose).
+	const std::vector<core::matrix4> &calculateSkinMatrices(
+			const std::vector<core::matrix4> &global_matrices, bool recompute = true) const;
 
 	void rigidAnimation(const std::vector<core::matrix4> &global_matrices);
 
@@ -132,6 +136,36 @@ public:
 	bool isStatic() const { return !IsAnimatable; }
 	//! Does the mesh have skinning weights?
 	bool hasWeights() const { return HasWeights; }
+
+	// --- Skinned pose memo -------------------------------------------------
+	// Software skinning rewrites this mesh's vertex buffers in place. A mesh is
+	// shared between every entity using the same model (see Client::getMesh), and
+	// a node holding both solid and transparent materials is drawn once per pass,
+	// so the *same* skinning used to run once per node per pass and always
+	// produced the same buffers. The memo records which pose is currently in the
+	// buffers so skinning runs at most once per distinct pose per frame.
+
+	//! Is the buffer content out of date for `pose_key`?
+	bool skinnedPoseStale(u64 pose_key) const
+	{
+		return !SkinnedPoseValid || SkinnedPoseKey != pose_key;
+	}
+	//! Record that the buffers now hold `pose_key`.
+	void commitSkinnedPose(u64 pose_key)
+	{
+		SkinnedPoseKey = pose_key;
+		SkinnedPoseValid = true;
+	}
+	//! Must be called whenever the vertex data is replaced from the outside.
+	void invalidateSkinnedPose() { SkinnedPoseValid = false; }
+
+	// Scratch storage. Every one of these used to be a fresh heap allocation per
+	// node per frame, which is very visible with thousands of mesh entities.
+	mutable std::vector<core::matrix4> ScratchJointTransforms;
+	mutable std::vector<core::matrix4> ScratchSkinMatrices;
+	mutable std::vector<bool> ScratchAnimatedJoints;
+	u64 SkinnedPoseKey = 0;
+	bool SkinnedPoseValid = false;
 
 	//! Back up static pose after local buffers have been modified directly
 	void updateStaticPose();

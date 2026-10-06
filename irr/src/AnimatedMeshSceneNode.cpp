@@ -19,6 +19,7 @@
 #include "SSkinMeshBuffer.h"
 #include <algorithm>
 #include <cstddef>
+#include <cstring>
 #include <optional>
 #include <cassert>
 
@@ -86,6 +87,15 @@ void AnimatedMeshSceneNode::OnRegisterSceneNode()
 	}
 }
 
+//! FNV-1a over the raw bits of a float, used to fingerprint a joint transform.
+static inline void hashPoseBits(u64 &hash, f32 value)
+{
+	u32 bits;
+	std::memcpy(&bits, &value, sizeof(bits));
+	hash ^= bits;
+	hash *= 1099511628211ULL;
+}
+
 //! OnAnimate() is called just before rendering the whole scene.
 void AnimatedMeshSceneNode::OnAnimate(u32 time_ms)
 {
@@ -108,12 +118,42 @@ void AnimatedMeshSceneNode::OnAnimate(u32 time_ms)
 
 	ISceneNode::OnAnimate(time_ms);
 
-	if (auto *skinnedMesh = dynamic_cast<SkinnedMesh*>(Mesh.get())) {
-		for (u16 i = 0; i < PerJoint.SceneNodes.size(); ++i)
-			PerJoint.GlobalMatrices[i] = PerJoint.SceneNodes[i]->getRelativeTransformation();
-		assert(PerJoint.GlobalMatrices.size() == skinnedMesh->getJointCount());
-		skinnedMesh->calculateGlobalMatrices(PerJoint.GlobalMatrices);
-		Box = skinnedMesh->calculateBoundingBox(PerJoint.GlobalMatrices);
+	if (Skinned) {
+		assert(PerJoint.GlobalMatrices.size() == Skinned->getJointCount());
+		// Fingerprint the pose that was just finalised (animation *and* any bone
+		// overrides applied by the callback above). If it did not change, every
+		// step below would only recompute what is already cached - and for
+		// software skinning that means rewriting every vertex of the mesh.
+		u64 pose_key = 14695981039346656037ULL;
+		bool raw_matrix_joints = false;
+		for (u16 i = 0; i < PerJoint.SceneNodes.size(); ++i) {
+			const auto &node = PerJoint.SceneNodes[i];
+			const auto &t = node->getTransform();
+			hashPoseBits(pose_key, t.translation.X);
+			hashPoseBits(pose_key, t.translation.Y);
+			hashPoseBits(pose_key, t.translation.Z);
+			hashPoseBits(pose_key, t.rotation.X);
+			hashPoseBits(pose_key, t.rotation.Y);
+			hashPoseBits(pose_key, t.rotation.Z);
+			hashPoseBits(pose_key, t.rotation.W);
+			hashPoseBits(pose_key, t.scale.X);
+			hashPoseBits(pose_key, t.scale.Y);
+			hashPoseBits(pose_key, t.scale.Z);
+			// Joints carrying a raw matrix are not covered by the fingerprint.
+			raw_matrix_joints |= node->Matrix.has_value();
+		}
+		PoseKey = pose_key;
+
+		PoseStale = raw_matrix_joints || !PoseValid || PoseKey != LastPoseKey ||
+				Skinned->skinnedPoseStale(PoseKey);
+		if (PoseStale) {
+			for (u16 i = 0; i < PerJoint.SceneNodes.size(); ++i)
+				PerJoint.GlobalMatrices[i] = PerJoint.SceneNodes[i]->getRelativeTransformation();
+			Skinned->calculateGlobalMatrices(PerJoint.GlobalMatrices);
+			Box = Skinned->calculateBoundingBox(PerJoint.GlobalMatrices);
+			LastPoseKey = PoseKey;
+			PoseValid = true;
+		}
 	} else {
 		Box = Mesh->getBoundingBox();
 	}
@@ -132,14 +172,26 @@ void AnimatedMeshSceneNode::render()
 
 	++PassCount;
 
-	if (auto *sm = dynamic_cast<SkinnedMesh *>(Mesh.get())) {
-		sm->rigidAnimation(PerJoint.GlobalMatrices);
-		if (sm->useSoftwareSkinning()) {
-			// Perform software skinning; matrices have already been calculated in OnAnimate
-			sm->skinMesh(PerJoint.GlobalMatrices);
-			++driver->getFrameStats().SWSkinnedMeshes;
-		} else if (sm->hasWeights()) {
-			driver->setJointTransforms(sm->calculateSkinMatrices(PerJoint.GlobalMatrices));
+	if (Skinned) {
+		const bool pose_stale = PoseStale;
+		if (pose_stale) {
+			Skinned->rigidAnimation(PerJoint.GlobalMatrices);
+			// The buffers now hold this pose: identical poses (other instances of
+			// the same shared mesh, the second render pass of this node) skip the
+			// skinning below entirely.
+			Skinned->commitSkinnedPose(PoseKey);
+			PoseStale = false;
+		}
+		if (Skinned->useSoftwareSkinning()) {
+			if (pose_stale) {
+				// Perform software skinning; matrices have already been calculated in OnAnimate
+				Skinned->skinMesh(PerJoint.GlobalMatrices);
+				++driver->getFrameStats().SWSkinnedMeshes;
+			}
+		} else if (Skinned->hasWeights()) {
+			// Joint uniforms are per draw call state, so they are always uploaded;
+			// only the matrix math is skipped when the pose is unchanged.
+			driver->setJointTransforms(Skinned->calculateSkinMatrices(PerJoint.GlobalMatrices, pose_stale));
 			++driver->getFrameStats().HWSkinnedMeshes;
 		}
 	}
@@ -380,6 +432,11 @@ void AnimatedMeshSceneNode::setMesh(IAnimatedMesh *mesh)
 	}
 
 	Anim.tracks.clear();
+
+	// Any pose we cached belongs to the mesh we just replaced.
+	Skinned = dynamic_cast<SkinnedMesh *>(Mesh.get());
+	PoseValid = false;
+	PoseStale = true;
 }
 
 //! updates the absolute position based on the relative and the parents position
@@ -433,18 +490,17 @@ void AnimatedMeshSceneNode::updateJointSceneNodes(
 //! updates the joint positions of this mesh
 void AnimatedMeshSceneNode::animateJoints()
 {
-	if (!Mesh || Mesh->getMeshType() != EAMT_SKINNED)
+	if (!Skinned)
 		return;
 
 	checkJoints();
 
-	const u16 n_tracks = Anim.tracks.size();
-	std::vector<u16> anim_idxs(n_tracks);
-	struct Progress {
-		SkinnedMesh::AnimationProgress progress;
-		s32 priority;
-	};
-	std::vector<Progress> progresses;
+	// Rebuilt for every node on every frame; kept out of the heap because this
+	// runs once per mesh entity per frame.
+	using Progress = std::pair<SkinnedMesh::AnimationProgress, s32>;
+	std::vector<Progress> &progresses = ProgressScratch;
+	progresses.clear();
+	progresses.reserve(Anim.tracks.size());
 	for (const auto [track, anim] : Anim.tracks) {
 		SkinnedMesh::AnimationProgress progress = {
 			track,
@@ -453,17 +509,21 @@ void AnimatedMeshSceneNode::animateJoints()
 		};
 		progresses.push_back({progress, anim.priority});
 	}
-	std::sort(progresses.begin(), progresses.end(),
-			[](const Progress &a, const Progress &b) {
-				return a.priority > b.priority;
-			});
-	std::vector<SkinnedMesh::AnimationProgress> final_progresses;
+	// Sorting a zero or one element vector is pure overhead.
+	if (progresses.size() > 1) {
+		std::sort(progresses.begin(), progresses.end(),
+				[](const Progress &a, const Progress &b) {
+					return a.second > b.second;
+				});
+	}
+	std::vector<SkinnedMesh::AnimationProgress> &final_progresses = FinalProgressScratch;
+	final_progresses.clear();
+	final_progresses.reserve(progresses.size());
 	for (const auto &p : progresses)
-		final_progresses.push_back(p.progress);
+		final_progresses.push_back(p.first);
 
-	SkinnedMesh *skinned_mesh = static_cast<SkinnedMesh *>(Mesh.get());
-	if (!skinned_mesh->isStatic()) {
-		auto transforms = skinned_mesh->animateMesh(
+	if (!Skinned->isStatic()) {
+		auto transforms = Skinned->animateMesh(
 				final_progresses, PerJoint.PreTransSaves);
 		updateJointSceneNodes(transforms);
 	}

@@ -153,6 +153,20 @@ private:
 	};
 
 	PerJointData PerJoint;
+
+	//! Cached cast of Mesh, to keep RTTI out of the per-frame animation path.
+	SkinnedMesh *Skinned = nullptr;
+
+	//! Fingerprint of the joint transforms used for the last full pose update.
+	u64 LastPoseKey = 0;
+	u64 PoseKey = 0;
+	//! Does the pose need to be recomputed and pushed to the mesh this frame?
+	bool PoseStale = true;
+	bool PoseValid = false;
+
+	//! Per-frame animation scratch, see animateJoints().
+	std::vector<std::pair<SkinnedMesh::AnimationProgress, s32>> ProgressScratch;
+	std::vector<SkinnedMesh::AnimationProgress> FinalProgressScratch;
 };
 
 } // end namespace scene
