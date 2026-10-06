@@ -813,6 +813,7 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 	updateAttachments();
 	setNodeLight(m_last_light);
 	updateMeshCulling();
+	updateAutomaticCulling();
 
 	if (m_animated_meshnode) {
 		u32 mat_count = m_animated_meshnode->getMaterialCount();
@@ -2005,6 +2006,69 @@ void GenericCAO::updateMeshCulling()
 			mat.FrontfaceCulling = false;
 		});
 	}
+}
+
+/*
+	How precisely this object's scene node may be frustum culled.
+
+	ISceneNode defaults to EAC_BOX, and that is all entity scene nodes have ever
+	got. CSceneManager::isCulled() implements EAC_BOX as "does the node's world
+	bounding box intersect the *bounding box of the view frustum*". The AABB of a
+	perspective frustum is several times the volume of the frustum itself, so
+	objects that are plainly off-screen still pass that test and are handed to
+	the driver, which then vertex-shades and rasterises them.
+
+	EAC_FRUSTUM_BOX additionally tests the node's bounding box against the six
+	frustum planes, which is the test that actually decides visibility. EAC_BOX
+	is kept as well because it is a much cheaper early-out for the common case.
+
+	Measured on llvmpipe (2 threads, 640x480, games/bench ent_ring): of the
+	entities that survive EAC_BOX, ~45% are outside the frustum when the objects
+	are scattered around the player, and every one of those costs a full
+	vertex-shade + rasterise on a software renderer. For a single compact group
+	in front of the camera EAC_BOX and EAC_FRUSTUM_BOX agree completely, which is
+	why the precise test also has to be cheap (see SViewFrustum::transform).
+	See the commit message for numbers.
+
+	Only enabled where the node's bounding box is guaranteed to enclose
+	everything the node draws, because a too-small box now culls something
+	visible instead of merely being conservative:
+
+	- OBJECTVISUAL_MESH: AnimatedMeshSceneNode recomputes Box from the skinned
+	  pose on every animation step (animateJoints()), so it tracks the geometry.
+	- OBJECTVISUAL_CUBE, OBJECTVISUAL_UPRIGHT_SPRITE: a fixed SMesh built once
+	  in addToScene(), recalculateBoundingBox()d, never animated, and drawn with
+	  the object shader, which does not displace vertices.
+
+	Deliberately left at the coarse default:
+
+	- OBJECTVISUAL_NODE, OBJECTVISUAL_ITEM: generateNodeMesh() can produce
+	  waving materials, whose vertex shader displaces vertices outside the mesh
+	  bounding box, and mesh-node animation rotates buffers without updating the
+	  node's Box.
+	- OBJECTVISUAL_WIELDITEM: WieldMeshSceneNode requests EAC_OFF itself.
+	- OBJECTVISUAL_SPRITE and the unknown-visual fallback: CBillboardSceneNode's
+	  getBoundingBox() is a cube that does not provably contain the
+	  camera-facing quad at every orientation, and at two triangles per sprite
+	  there is nothing to win.
+*/
+void GenericCAO::updateAutomaticCulling()
+{
+	scene::ISceneNode *node = getSceneNode();
+	if (!node)
+		return;
+
+	u16 culling = scene::EAC_BOX;
+	switch (m_prop.visual) {
+	case OBJECTVISUAL_MESH:
+	case OBJECTVISUAL_CUBE:
+	case OBJECTVISUAL_UPRIGHT_SPRITE:
+		culling |= scene::EAC_FRUSTUM_BOX;
+		break;
+	default:
+		break;
+	}
+	node->setAutomaticCulling(culling);
 }
 
 // Prototype

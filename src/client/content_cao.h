@@ -315,6 +315,9 @@ public:
 
 	void updateMeshCulling();
 
+	/// Decide how precisely this object's scene node may be frustum culled.
+	void updateAutomaticCulling();
+
 private:
 
 	/// Update the parent chain so getPosition() returns an up to date position.
