@@ -42,6 +42,7 @@
 #include "threading/lambda.h"
 #include "translation.h"
 #include "util/basic_macros.h"
+#include "util/screenshot.h"
 #include "util/directiontables.h"
 #include "util/quicktune_shortcutter.h"
 #include "version.h"
@@ -3642,6 +3643,49 @@ void Game::updateShadows()
 	shadow->getDirectionalLight().updateFrustum(camera, client);
 }
 
+/*
+	Benchmark harness hook: take exactly one screenshot at a fixed frame index.
+
+	Renderer changes that only affect *culling* must not change a single pixel of
+	the output, and "the FPS went up" is not evidence of that. This gives the
+	benchmark game a deterministic way to capture a frame so two builds can be
+	compared pixel for pixel:
+
+	  bench_screenshot_frame = <n>   (0 = disabled, the default; otherwise one
+	                                screenshot every <n> drawn frames)
+
+	The frame counter starts at the first drawn frame, so combine it with a
+	frozen scene (bench_freeze, time_speed = 0) and a fixed camera. The file
+	lands in screenshot_path with the normal timestamped name.
+
+	The shot is taken directly rather than through Client::requestScreenshot()
+	because that pushes a "Saved screenshot to ..." message into the in-game
+	chat, which is drawn over the scene and would make any pixel-for-pixel
+	comparison of two builds useless.
+*/
+void Game::maybeBenchScreenshot()
+{
+	static bool initialized = false;
+	static s32 every = 0;
+	static u64 frame = 0;
+
+	if (!initialized) {
+		initialized = true;
+		every = g_settings->getS32("bench_screenshot_frame");
+	}
+	if (every <= 0)
+		return;
+	if (++frame % (u64)every != 0)
+		return;
+
+	std::string filename;
+	if (takeScreenshot(this->driver, filename))
+		actionstream << "[bench] saved screenshot (frame " << frame << ") "
+				<< filename << std::endl;
+	else
+		errorstream << "[bench] screenshot failed at frame " << frame << std::endl;
+}
+
 void Game::drawScene(ProfilerGraph *graph, RunStats *stats)
 {
 	ZoneScoped;
@@ -3716,6 +3760,7 @@ void Game::drawScene(ProfilerGraph *graph, RunStats *stats)
 	}
 
 	// Must be called immediately before endScene() to capture the rendered frame
+	this->maybeBenchScreenshot();
 	this->client->takeScreenshotIfRequested();
 
 	this->driver->endScene();

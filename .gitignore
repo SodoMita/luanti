@@ -61,8 +61,10 @@ AppDir
 /bin/
 /games/*
 !/games/devtest/
+!/games/bench/
 /games/devtest/mods/soundstuff/sounds/gitignored_sounds/*
-!/games/devtest/mods/soundstuff/sounds/gitignored_sounds/custom_sounds_here.txt
+!/games/devtest/
+!/games/bench/mods/soundstuff/sounds/gitignored_sounds/custom_sounds_here.txt
 /cache
 /textures/*
 !/textures/base/
