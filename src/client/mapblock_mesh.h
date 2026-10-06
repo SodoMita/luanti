@@ -305,6 +305,10 @@ private:
 	std::vector<MeshTriangle> m_transparent_triangles;
 	// Binary Space Partitioning tree for the block
 	MapBlockBspTree m_bsp_tree;
+	/// Scratch for the BSP traversal result. The transparency order is updated
+	/// every frame the camera moves, so keeping this allocation around saves
+	/// one allocation of up to a few thousand entries per block and frame.
+	std::vector<s32> m_transparent_refs;
 	// Ordered list of references to parts of transparent buffers to draw
 	std::vector<PartialMeshBuffer> m_transparent_buffers;
 	// Is m_transparent_buffers currently in consolidated form?

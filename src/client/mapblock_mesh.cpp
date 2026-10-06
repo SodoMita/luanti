@@ -410,47 +410,6 @@ void PartialMeshBuffer::draw(video::IVideoDriver *driver) const
 	MapBlockMesh
 */
 
-static void applyColorAndMerge(std::vector<PreMeshBuffer> &prebuffers)
-{
-	// TODO: we should change the meshgen so it already applies the tile color
-	// so that we don't need to this extra step.
-	// However currently the CAO code relies on the ability to erase the vertex
-	// colors (light data) before applying the tile colors.
-
-	for (auto &p : prebuffers) {
-		// bake color into vertices
-		p.applyTileColor();
-		// erase color information for later comparisons
-		p.layer.has_color = false;
-		p.layer.color = 0;
-	}
-
-	std::unordered_map<TileLayer, size_t> seen;
-	for (size_t i = 0; i < prebuffers.size(); i++) {
-		PreMeshBuffer &p = prebuffers[i];
-		auto it = seen.find(p.layer);
-		if (it == seen.end()) { // first time
-			seen[p.layer] = i;
-			continue;
-		}
-		// merge
-		auto &dst = prebuffers[it->second];
-		assert(p.layer == dst.layer);
-		if (dst.append(p)) {
-			p = PreMeshBuffer();
-		} else {
-			// other buffer full, this one becomes the new target
-			it->second = i;
-		}
-	}
-
-	// remove all empty buffers
-	prebuffers.erase(std::remove_if(prebuffers.begin(), prebuffers.end(),
-		[] (const PreMeshBuffer &p) {
-		return p.empty();
-	}), prebuffers.end());
-}
-
 MapBlockMesh::MapBlockMesh(Client *client, MeshMakeData *data):
 	m_tsrc(client->getTextureSource()),
 	m_shdrsrc(client->getShaderSource()),
@@ -489,6 +448,9 @@ MapBlockMesh::MapBlockMesh(Client *client, MeshMakeData *data):
 	v3f offset = intToFloat((data->m_blockpos - mesh_grid.getMeshPos(data->m_blockpos)) * MAP_BLOCKSIZE, BS);
 
 	MeshCollector collector(m_bounding_sphere_center, offset);
+	// Only the mapblock path tints tiles this way; other MeshCollector users
+	// (CAO, wieldmesh) must keep the vertex colors they generate.
+	collector.setBakeTileColor(true);
 
 	{
 		// Generate everything
@@ -504,7 +466,7 @@ MapBlockMesh::MapBlockMesh(Client *client, MeshMakeData *data):
 	for (int layer = 0; layer < MAX_TILE_LAYERS; layer++) {
 		scene::SMesh *mesh = static_cast<scene::SMesh *>(m_mesh[layer].get());
 
-		applyColorAndMerge(collector.prebuffers[layer]);
+		applyColorAndMerge(collector.prebuffers[layer], collector.tileColorBaked());
 
 		for (size_t i = 0; i < collector.prebuffers[layer].size(); i++) {
 			PreMeshBuffer &p = collector.prebuffers[layer][i];
@@ -639,14 +601,20 @@ void MapBlockMesh::updateTransparentBuffers(v3f camera_pos, v3s16 block_pos,
 	v3f block_posf = intToFloat(block_pos * MAP_BLOCKSIZE, BS);
 	v3f rel_camera_pos = camera_pos - block_posf;
 
-	std::vector<s32> triangle_refs;
-	m_bsp_tree.traverse(rel_camera_pos, triangle_refs);
+	// reuse the scratch, it only lives for the duration of this call
+	m_transparent_refs.clear();
+	m_bsp_tree.traverse(rel_camera_pos, m_transparent_refs);
+	std::vector<s32> &triangle_refs = m_transparent_refs;
 
 	// arrange index sequences into partial buffers
 	m_transparent_buffers_consolidated = false;
 	m_transparent_buffers.clear();
 
+	// one strain per buffer at most, so this is an upper bound for the reserve
+	const size_t max_strains = m_mesh[0]->getMeshBufferCount() +
+			m_mesh[1]->getMeshBufferCount();
 	std::vector<std::pair<scene::SMeshBuffer *, std::vector<u16>>> ordered_strains;
+	ordered_strains.reserve(std::min<size_t>(max_strains, triangle_refs.size() / 3 + 1));
 	std::unordered_map<scene::SMeshBuffer *, size_t> strain_idxs;
 
 	if (group_by_buffers) {
