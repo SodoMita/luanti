@@ -234,6 +234,8 @@ int main(int argc, char **argv)
 	const u32 verts = argc > 3 ? (u32)atoi(argv[3]) : 8000;
 	const u32 passes = argc > 4 ? (u32)atoi(argv[4]) : 2;
 	const u32 frames = 60;
+	const bool csv = getenv("POSE_BENCH_CSV") != nullptr;
+	const double mix = getenv("POSE_BENCH_MIX") ? atof(getenv("POSE_BENCH_MIX")) : 0.25;
 
 	std::vector<Entity> scene(entities);
 	for (auto &e : scene)
@@ -243,13 +245,22 @@ int main(int argc, char **argv)
 			entities, joints, verts, passes, frames);
 
 	using clk = std::chrono::steady_clock;
+	std::vector<double> trace(frames, 0.0);
 	auto bench = [&](bool optimised) {
 		for (auto &e : scene) {
 			e.pose_valid = false;
 			e.checksum = 0.0f;
 		}
-		auto t0 = clk::now();
 		for (u32 f = 0; f < frames; f++) {
+			// A rotating slice of the scene changes pose this frame, like a crowd
+			// where only some members are actually animating.
+			const u32 moving = (u32)(entities * mix);
+			const u32 start = (u32)((u64)f * 2654435761u % entities);
+			for (u32 k = 0; k < moving; k++) {
+				auto &e = scene[(start + k) % entities];
+				e.joints[k % joints].t.translation.x += 0.0001f * (f % 7 + 1);
+			}
+			auto f0 = clk::now();
 			for (auto &e : scene) {
 				if (optimised)
 					animate_after(e);
@@ -262,13 +273,23 @@ int main(int argc, char **argv)
 						pose_before(e);
 				}
 			}
+			auto f1 = clk::now();
+			trace[f] = std::chrono::duration<double, std::milli>(f1 - f0).count();
 		}
-		auto t1 = clk::now();
-		return std::chrono::duration<double, std::milli>(t1 - t0).count();
+		double total = 0.0;
+		for (double t : trace)
+			total += t;
+		return total;
 	};
 
 	const double before = bench(false);
+	std::vector<double> before_trace = trace;
 	const double after = bench(true);
+	if (csv) {
+		printf("frame,before_ms,after_ms\n");
+		for (u32 f = 0; f < frames; f++)
+			printf("%u,%.3f,%.3f\n", f, before_trace[f], trace[f]);
+	}
 
 	printf("before: %8.2f ms total   %7.3f us/entity/frame\n",
 			before, before * 1000.0 / (frames * entities));

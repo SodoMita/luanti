@@ -154,14 +154,10 @@ core::aabbox3df SkinnedMesh::calculateBoundingBox(
 
 // Software Skinning
 
-const std::vector<core::matrix4> &SkinnedMesh::calculateSkinMatrices(
-		const std::vector<core::matrix4> &global_matrices, bool recompute) const
+std::vector<core::matrix4> SkinnedMesh::calculateSkinMatrices(const std::vector<core::matrix4> &global_matrices) const
 {
 	assert(global_matrices.size() == AllJoints.size());
-	std::vector<core::matrix4> &skin_matrices = ScratchSkinMatrices;
-	if (!recompute && skin_matrices.size() == AllJoints.size())
-		return skin_matrices;
-	skin_matrices.clear();
+	std::vector<core::matrix4> skin_matrices;
 	skin_matrices.reserve(AllJoints.size());
 	for (u16 i = 0; i < AllJoints.size(); ++i) {
 		auto skin_mat = global_matrices[i];

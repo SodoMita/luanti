@@ -121,9 +121,11 @@ void AnimatedMeshSceneNode::OnAnimate(u32 time_ms)
 	if (Skinned) {
 		assert(PerJoint.GlobalMatrices.size() == Skinned->getJointCount());
 		// Fingerprint the pose that was just finalised (animation *and* any bone
-		// overrides applied by the callback above). If it did not change, every
-		// step below would only recompute what is already cached - and for
-		// software skinning that means rewriting every vertex of the mesh.
+		// overrides applied by the callback above). If it did not change, the
+		// steps below would only recompute what is already cached: the composed
+		// joint matrices and the animated bounding box. The skinning itself is
+		// decided in render(), where the answer cannot be invalidated by another
+		// node sharing this mesh.
 		u64 pose_key = 14695981039346656037ULL;
 		bool raw_matrix_joints = false;
 		for (u16 i = 0; i < PerJoint.SceneNodes.size(); ++i) {
@@ -144,9 +146,11 @@ void AnimatedMeshSceneNode::OnAnimate(u32 time_ms)
 		}
 		PoseKey = pose_key;
 
-		PoseStale = raw_matrix_joints || !PoseValid || PoseKey != LastPoseKey ||
-				Skinned->skinnedPoseStale(PoseKey);
-		if (PoseStale) {
+		// Note that this is deliberately a *local* test. Whether the shared mesh
+		// currently holds this pose is a different question, and it is answered
+		// in render() where the answer cannot be invalidated by another node
+		// skinning in between (see the comment there).
+		if (raw_matrix_joints || !PoseValid || PoseKey != LastPoseKey) {
 			for (u16 i = 0; i < PerJoint.SceneNodes.size(); ++i)
 				PerJoint.GlobalMatrices[i] = PerJoint.SceneNodes[i]->getRelativeTransformation();
 			Skinned->calculateGlobalMatrices(PerJoint.GlobalMatrices);
@@ -173,25 +177,27 @@ void AnimatedMeshSceneNode::render()
 	++PassCount;
 
 	if (Skinned) {
-		const bool pose_stale = PoseStale;
-		if (pose_stale) {
+		// Software skinning rewrites the vertex buffers in place, and one mesh is
+		// shared by every node using the same model - while each node is drawn
+		// immediately after it skins. The decision therefore has to be taken
+		// here, not in OnAnimate(): another node may have skinned a different
+		// pose in between, and trusting an earlier answer would draw it.
+		// What this still wins: nodes sharing a pose (and this node's second
+		// render pass) do one skin between them instead of one each.
+		const bool stale = Skinned->skinnedPoseStale(PoseKey);
+		if (stale) {
 			Skinned->rigidAnimation(PerJoint.GlobalMatrices);
-			// The buffers now hold this pose: identical poses (other instances of
-			// the same shared mesh, the second render pass of this node) skip the
-			// skinning below entirely.
+			// The buffers now hold this pose.
 			Skinned->commitSkinnedPose(PoseKey);
-			PoseStale = false;
 		}
 		if (Skinned->useSoftwareSkinning()) {
-			if (pose_stale) {
+			if (stale) {
 				// Perform software skinning; matrices have already been calculated in OnAnimate
 				Skinned->skinMesh(PerJoint.GlobalMatrices);
 				++driver->getFrameStats().SWSkinnedMeshes;
 			}
 		} else if (Skinned->hasWeights()) {
-			// Joint uniforms are per draw call state, so they are always uploaded;
-			// only the matrix math is skipped when the pose is unchanged.
-			driver->setJointTransforms(Skinned->calculateSkinMatrices(PerJoint.GlobalMatrices, pose_stale));
+			driver->setJointTransforms(Skinned->calculateSkinMatrices(PerJoint.GlobalMatrices));
 			++driver->getFrameStats().HWSkinnedMeshes;
 		}
 	}
@@ -433,11 +439,10 @@ void AnimatedMeshSceneNode::setMesh(IAnimatedMesh *mesh)
 
 	Anim.tracks.clear();
 
-	// Any pose we cached belongs to the mesh we just replaced.
-	Skinned = dynamic_cast<SkinnedMesh *>(Mesh.get());
-	PoseValid = false;
-	PoseStale = true;
-}
+		// Any pose we cached belongs to the mesh we just replaced.
+		Skinned = dynamic_cast<SkinnedMesh *>(Mesh.get());
+		PoseValid = false;
+	}
 
 //! updates the absolute position based on the relative and the parents position
 void AnimatedMeshSceneNode::updateAbsolutePosition()

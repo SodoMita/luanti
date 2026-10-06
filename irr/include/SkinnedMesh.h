@@ -66,11 +66,7 @@ public:
 	//! by multiplying with respective parent matrices.
 	void calculateGlobalMatrices(std::vector<core::matrix4> &matrices) const;
 
-	//! Turns the given global matrices into skin matrices.
-	//! The result is kept in a scratch buffer; set `recompute` to false to keep
-	//! the previously computed matrices (they only depend on the pose).
-	const std::vector<core::matrix4> &calculateSkinMatrices(
-			const std::vector<core::matrix4> &global_matrices, bool recompute = true) const;
+	std::vector<core::matrix4> calculateSkinMatrices(const std::vector<core::matrix4> &global_matrices) const;
 
 	void rigidAnimation(const std::vector<core::matrix4> &global_matrices);
 
@@ -146,6 +142,11 @@ public:
 	// buffers so skinning runs at most once per distinct pose per frame.
 
 	//! Is the buffer content out of date for `pose_key`?
+	//!
+	//! IMPORTANT: this must be evaluated immediately before the draw that relies
+	//! on it, never in OnAnimate(). A node is drawn right after it skins, and a
+	//! mesh is shared, so a decision taken earlier in the frame can be made
+	//! invalid by another node skinning in between. See AnimatedMeshSceneNode::render.
 	bool skinnedPoseStale(u64 pose_key) const
 	{
 		return !SkinnedPoseValid || SkinnedPoseKey != pose_key;
@@ -162,7 +163,6 @@ public:
 	// Scratch storage. Every one of these used to be a fresh heap allocation per
 	// node per frame, which is very visible with thousands of mesh entities.
 	mutable std::vector<core::matrix4> ScratchJointTransforms;
-	mutable std::vector<core::matrix4> ScratchSkinMatrices;
 	mutable std::vector<bool> ScratchAnimatedJoints;
 	u64 SkinnedPoseKey = 0;
 	bool SkinnedPoseValid = false;
