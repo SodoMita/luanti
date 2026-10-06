@@ -144,8 +144,11 @@ void AnimatedMeshSceneNode::OnAnimate(u32 time_ms)
 		}
 		PoseKey = pose_key;
 
-		PoseStale = raw_matrix_joints || !PoseValid || PoseKey != LastPoseKey ||
-				Skinned->skinnedPoseStale(PoseKey);
+		// This flag describes this scene node's cached matrices and bounds only.
+		// The software-skinned vertex buffers belong to the shared SkinnedMesh and
+		// must be checked later, at render time: another node may render a
+		// different pose between OnAnimate() and this node's render().
+		PoseStale = raw_matrix_joints || !PoseValid || PoseKey != LastPoseKey;
 		if (PoseStale) {
 			for (u16 i = 0; i < PerJoint.SceneNodes.size(); ++i)
 				PerJoint.GlobalMatrices[i] = PerJoint.SceneNodes[i]->getRelativeTransformation();
@@ -173,25 +176,28 @@ void AnimatedMeshSceneNode::render()
 	++PassCount;
 
 	if (Skinned) {
-		const bool pose_stale = PoseStale;
-		if (pose_stale) {
+		const bool local_pose_stale = PoseStale;
+		// Rigid buffer transforms, software-skinned vertices, and the hardware
+		// skin-matrix scratch buffer all live on the shared mesh. Their pose must
+		// therefore be checked in render order, not animation traversal order.
+		// local_pose_stale also keeps unhashable raw-matrix joints conservative.
+		const bool shared_pose_stale = local_pose_stale ||
+				Skinned->skinnedPoseStale(PoseKey);
+		if (shared_pose_stale) {
 			Skinned->rigidAnimation(PerJoint.GlobalMatrices);
-			// The buffers now hold this pose: identical poses (other instances of
-			// the same shared mesh, the second render pass of this node) skip the
-			// skinning below entirely.
 			Skinned->commitSkinnedPose(PoseKey);
-			PoseStale = false;
 		}
+		PoseStale = false;
+
 		if (Skinned->useSoftwareSkinning()) {
-			if (pose_stale) {
-				// Perform software skinning; matrices have already been calculated in OnAnimate
+			if (shared_pose_stale) {
 				Skinned->skinMesh(PerJoint.GlobalMatrices);
 				++driver->getFrameStats().SWSkinnedMeshes;
 			}
 		} else if (Skinned->hasWeights()) {
-			// Joint uniforms are per draw call state, so they are always uploaded;
-			// only the matrix math is skipped when the pose is unchanged.
-			driver->setJointTransforms(Skinned->calculateSkinMatrices(PerJoint.GlobalMatrices, pose_stale));
+			// Joint uniforms are per draw call state, so they are always uploaded.
+			driver->setJointTransforms(Skinned->calculateSkinMatrices(
+					PerJoint.GlobalMatrices, shared_pose_stale));
 			++driver->getFrameStats().HWSkinnedMeshes;
 		}
 	}
