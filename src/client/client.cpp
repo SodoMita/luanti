@@ -14,6 +14,7 @@
 #include "client/mesh_generator_thread.h"
 #include "client/particles.h"
 #include "client/renderingengine.h"
+#include "client/instanced_entity_renderer.h"
 #include "client/sound.h"
 #include "client/texturepaths.h"
 #include "client/texturesource.h"
@@ -153,6 +154,9 @@ Client::Client(
 		tsrc, this
 	),
 	m_particle_manager(std::make_unique<ParticleManager>(&m_env)),
+	m_entity_batcher(std::make_unique<InstancedEntityRenderer>(
+		rendering_engine->get_scene_manager(),
+		rendering_engine->get_video_driver())),
 	m_allow_login_or_register(allow_login_or_register),
 	m_server_ser_ver(SER_FMT_VER_INVALID),
 	m_last_chat_message_sent(time(NULL)),

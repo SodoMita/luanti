@@ -10,6 +10,7 @@
 #include "client/client.h"
 #include "client/clientmap.h"
 #include "client/hud.h"
+#include "client/instanced_entity_renderer.h"
 #include "client/minimap.h"
 #include "client/shadows/dynamicshadowsrender.h"
 #include <IGUIEnvironment.h>
@@ -20,6 +21,9 @@ void Draw3D::run(PipelineContext &context)
 	if (m_target)
 		m_target->activate(context);
 
+	// Render batched entities before scene manager drawAll
+	if (context.client && context.client->getEntityBatcher())
+		context.client->getEntityBatcher()->render();
 	context.device->getSceneManager()->drawAll();
 	context.device->getVideoDriver()->setTransform(video::ETS_WORLD, core::IdentityMatrix);
 	if (!context.show_hud)
