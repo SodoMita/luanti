@@ -749,7 +749,7 @@ void COpenGL3DriverBase::drawMeshBufferInstanced(const scene::IMeshBuffer *mb,
 	updateHardwareBuffer(hwidx);
 
 	// 16-bit indices are all that mesh buffers use
-	if (ib->getType() != scene::EIT_16BIT || mb->getPrimitiveType() != scene::EPT_TRIANGLES) {
+	if (ib->getType() != video::EIT_16BIT || mb->getPrimitiveType() != scene::EPT_TRIANGLES) {
 		CNullDriver::drawMeshBufferInstanced(mb, instanceMatrices, instanceCount);
 		return;
 	}
@@ -802,7 +802,7 @@ bool COpenGL3DriverBase::canDrawInstanced(const scene::IMeshBuffer *mb)
 		return false;
 	if (mb->getPrimitiveType() != scene::EPT_TRIANGLES)
 		return false;
-	if (mb->getIndexBuffer()->getType() != scene::EIT_16BIT)
+	if (mb->getIndexBuffer()->getType() != video::EIT_16BIT)
 		return false;
 	// Both buffers must be in VRAM (and stay there, i.e. not EHM_NEVER)
 	return getBufferLink(mb->getVertexBuffer()) != nullptr &&

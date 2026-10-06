@@ -8,6 +8,7 @@
 
 #include <EMaterialTypes.h>
 #include <IDummyTransformationSceneNode.h>
+#include <IAnimatedMesh.h>
 #include <AnimSpec.h>
 
 #include "object_properties.h"

@@ -411,7 +411,7 @@ bool GenericCAO::canBeBatched(scene::IAnimatedMesh *mesh) const
 		return false;
 
 	// The mesh must be static: no skeletal animation and no animation frames
-	if (mesh->getMeshType() != scene::EAMT_STATIC || mesh->getFrameCount() > 1)
+	if (mesh->getMeshType() != scene::EAMT_STATIC || mesh->getTrackCount() > 0)
 		return false;
 	if (mesh->needsHwSkinning())
 		return false;

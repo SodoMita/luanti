@@ -13,6 +13,7 @@
 #include <IMeshBuffer.h>
 #include <ISceneManager.h>
 #include <IVideoDriver.h>
+#include <IMaterialRenderer.h>
 
 ShaderFeatures MeshBatchDrawer::getInstancedFeatures()
 {
@@ -27,7 +28,7 @@ MeshBatchDrawer::MeshBatchDrawer(scene::ISceneNode *parent, scene::ISceneManager
 	m_driver(driver), m_shaders(shaders)
 {
 	setAutomaticCulling(scene::EAC_OFF);
-	m_bbox.reset(0.0f);
+	m_bbox.reset(0.0f, 0.0f, 0.0f);
 
 	if (!m_driver || !m_shaders) {
 		m_enabled = false;
@@ -36,7 +37,7 @@ MeshBatchDrawer::MeshBatchDrawer(scene::ISceneNode *parent, scene::ISceneManager
 
 	// Hardware instancing is required, otherwise this is not worth it
 	m_enabled = m_driver->queryInstancingSupport() &&
-		g_settings->getBool("client_entity_batching", true);
+		g_settings->getBool("client_entity_batching");
 	// The shadow map renderer draws scene nodes again with an override material,
 	// which would not match the instanced shaders here.
 	if (g_settings->getBool("enable_dynamic_shadows"))
@@ -62,7 +63,7 @@ video::E_MATERIAL_TYPE MeshBatchDrawer::getInstancedMaterialType(video::E_MATERI
 	if (!info.name.empty()) {
 		ShaderConstants consts = info.input_constants;
 		consts["USE_INSTANCING"] = 1;
-		u32 id = m_shaders->getShader(info.name, consts, info.base_material, info.setter_cb);
+		u32 id = m_shaders->getShader(info.name, consts, info.base_material, info.setter_cb.get());
 		if (id != 0) {
 			const ShaderInfo &newinfo = m_shaders->getShaderInfo(id);
 			if (newinfo.material != video::EMT_INVALID)
@@ -124,7 +125,7 @@ void MeshBatchDrawer::buildBatches()
 
 	m_batches.clear();
 	m_stats_culled = 0;
-	m_bbox.reset(0.0f);
+	m_bbox.reset(0.0f, 0.0f, 0.0f);
 	bool first_box = true;
 
 	for (const Instance &inst : m_pending) {
@@ -140,7 +141,7 @@ void MeshBatchDrawer::buildBatches()
 			radius = 0.01f;
 
 		if (first_box) {
-			m_bbox.reset(center);
+			m_bbox.reset(center.X, center.Y, center.Z);
 			first_box = false;
 		} else {
 			m_bbox.addInternalPoint(center);

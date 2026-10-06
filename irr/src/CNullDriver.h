@@ -276,7 +276,8 @@ public:
 
 		const core::matrix4 world = getTransform(ETS_WORLD);
 		for (u32 i = 0; i < instanceCount; i++) {
-			core::matrix4 inst(instanceMatrices + 16 * i, core::EM4CONST_COPY);
+			core::matrix4 inst;
+			inst.setM(instanceMatrices + 16 * i);
 			setTransform(ETS_WORLD, world * inst);
 			drawMeshBuffer(mb);
 		}

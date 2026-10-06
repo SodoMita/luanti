@@ -83,7 +83,7 @@ public:
 	void render() override;
 	const core::aabbox3d<f32> &getBoundingBox() const override { return m_bbox; }
 	u32 getMaterialCount() const override { return 0; }
-	const video::SMaterial &getMaterial(u32 i) const override
+	video::SMaterial &getMaterial(u32 i) override
 	{
 		static video::SMaterial dummy;
 		return dummy;
@@ -91,9 +91,7 @@ public:
 	void setVisible(bool visible) override { m_visible = visible; }
 	bool isVisible() const { return m_visible; }
 	scene::ESCENE_NODE_TYPE getType() const override { return scene::ESNT_UNKNOWN; }
-	const char *getTypeName() const override { return "MeshBatchDrawer"; }
-	void serializeAttributes(io::IAttributes *out, io::SAttributeReadWriteOptions *options) const override {}
-	void deserializeAttributes(io::IAttributes *in, io::SAttributeReadWriteOptions *options) override {}
+	const char *getTypeName() const { return "MeshBatchDrawer"; }
 	scene::ISceneNode *clone(scene::ISceneNode *newParent, scene::ISceneManager *newManager) override { return nullptr; }
 
 	/// Shader features used for the instanced variant of a shader
@@ -158,7 +156,7 @@ private:
 	std::unordered_map<BatchKey, Batch, BatchKeyHash> m_batches;
 	std::unordered_map<int, int> m_material_cache;
 
-	core::aabbox3d<f32> m_bbox;
+	core::aabbox3d<f32> m_bbox{0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
 	bool m_visible = true;
 	bool m_enabled = false;
 
