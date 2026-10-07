@@ -87,6 +87,56 @@ struct MeshCollector
 			const u16 *indices, u32 numIndices);
 
 	/**
+	 * Append vertices that still need a per-vertex transformation, writing the
+	 * result straight into the destination buffer.
+	 *
+	 * The alternative is transforming into a scratch array and handing that to
+	 * append(), which costs an extra 36-byte store and load per vertex. Mesh
+	 * nodes are where that matters: every vertex of every model in a block goes
+	 * through here, measured at ~34ns per vertex of which the scratch round trip
+	 * was ~11ns.
+	 *
+	 * `transform` is called exactly once per vertex and must return the vertex
+	 * as append() would have received it: already oriented, lit and translated
+	 * by the node's origin, but *not* by the collector offset and with the tile
+	 * colour not yet baked in. Holding that contract is what makes this and the
+	 * scratch path produce byte-identical buffers.
+	 */
+	template<typename F>
+	void appendTransformed(const TileLayer &layer,
+			const video::S3DVertex *vertices, u32 numVertices,
+			const u16 *indices, u32 numIndices, u8 layernum, F &&transform)
+	{
+		PreMeshBuffer &p = findBuffer(layer, layernum, numVertices);
+
+		const u16 aux = layer.texture_layer_idx;
+		const bool bake = m_bake_tile_color &&
+				!PreMeshBuffer::isColorIdentity(layer.color);
+		const video::SColor &tc = layer.color;
+
+		const u32 vertex_count = p.vertices.size();
+		assert(vertex_count + numVertices <= U16_MAX);
+
+		f32 radius_sq = m_bounding_radius_sq;
+		const v3f &center = m_center_pos;
+		for (u32 i = 0; i < numVertices; i++) {
+			video::S3DVertex v = transform(vertices[i]);
+			video::SColor color = v.Color;
+			if (bake)
+				PreMeshBuffer::bakeColor(color, tc);
+			// constructed in place, no intermediate vertex
+			p.vertices.emplace_back(v.Pos + offset, v.Normal, color, v.TCoords, aux);
+			// measured before the collector offset, exactly as append() does, and
+			// kept in a local so the maximum is not a loop-carried dependency
+			radius_sq = std::max(radius_sq, (v.Pos - center).getLengthSQ());
+		}
+		m_bounding_radius_sq = radius_sq;
+
+		for (u32 i = 0; i < numIndices; i++)
+			p.indices.push_back(indices[i] + vertex_count);
+	}
+
+	/**
 	 * Bake the tile color into the vertex colors while collecting instead of in
 	 * a separate pass over every buffer afterwards.
 	 * Only enable this where the tile color is meant to be applied at all (see

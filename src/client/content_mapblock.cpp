@@ -2005,12 +2005,11 @@ void MapblockMeshGenerator::drawMeshNode()
 		scene::IMeshBuffer *buf = mesh->getMeshBuffer(j);
 		const auto *source = static_cast<const video::S3DVertex *>(buf->getVertices());
 		const u32 vertex_count = buf->getVertexCount();
-		vertices.resize(vertex_count);
 
-		// The mesh is shared and immutable. Apply orientation, lighting and block
-		// translation only to the reusable scratch copy.
-		for (u32 k = 0; k < vertex_count; k++) {
-			video::S3DVertex vertex = source[k];
+		// The mesh is shared and immutable, so orientation, lighting and block
+		// translation are applied while copying.
+		auto transform = [&] (const video::S3DVertex &src) {
+			video::S3DVertex vertex = src;
 			rotate(vertex.Pos);
 			rotate(vertex.Normal);
 			if (data->m_smooth_lighting) {
@@ -2022,11 +2021,35 @@ void MapblockMeshGenerator::drawMeshNode()
 				vertex.Color = color;
 			}
 			vertex.Pos += cur_node.origin;
-			vertices[k] = vertex;
+			return vertex;
+		};
+
+		// One non-empty layer is the common case, and then the transformed vertex
+		// can be written straight into the collector's buffer. With more than one
+		// layer the same transformed vertices go to each of them, so transform
+		// once into scratch rather than redo the rotation and lighting per layer.
+		u32 layer_count = 0;
+		u8 single_layer = 0;
+		for (u8 layernum = 0; layernum < MAX_TILE_LAYERS; layernum++) {
+			if (tile.layers[layernum].empty())
+				continue;
+			if (layer_count == 0)
+				single_layer = layernum;
+			layer_count++;
 		}
 
-		collector->append(tile, vertices.data(), vertex_count,
-				buf->getIndices(), buf->getIndexCount());
+		if (layer_count == 1) {
+			collector->appendTransformed(tile.layers[single_layer], source,
+					vertex_count, buf->getIndices(), buf->getIndexCount(),
+					single_layer, transform);
+		} else {
+			vertices.resize(vertex_count);
+			for (u32 k = 0; k < vertex_count; k++)
+				vertices[k] = transform(source[k]);
+
+			collector->append(tile, vertices.data(), vertex_count,
+					buf->getIndices(), buf->getIndexCount());
+		}
 	}
 }
 
