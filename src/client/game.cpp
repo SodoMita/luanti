@@ -1287,6 +1287,16 @@ void Game::updateProfilers(const RunStats &stats, const FpsControl &draw_times,
 		draw_times.busy_time - stats.drawtime);
 	g_profiler->graphAdd("Sleep [us]", draw_times.sleep_time);
 
+	// Graph values are only consumed by the on-screen profiler graph
+	// (graphPop()), never by Profiler::print(), which reads m_data. Mirror the
+	// per-frame timings into m_data as well so the printed profiler and the
+	// graph agree. Without this there is no way to tell from a log how much of
+	// a frame is inside the driver and how much is engine code around it.
+	// ("Draw scene [us]" is mirrored in drawScene(), where the value is fresh.)
+	g_profiler->avg("Time non-rendering [us]",
+		draw_times.busy_time - stats.drawtime);
+	g_profiler->avg("Sleep [us]", draw_times.sleep_time);
+
 	g_profiler->graphSet("FPS", 1.0f / dtime);
 
 	auto stats2 = driver->getFrameStats();
@@ -3767,6 +3777,8 @@ void Game::drawScene(ProfilerGraph *graph, RunStats *stats)
 
 	stats->drawtime = tt_draw.stop(true);
 	g_profiler->graphAdd("Draw scene [us]", stats->drawtime);
+	// See updateProfilers(): graph values never reach the printed profiler.
+	g_profiler->avg("Draw scene [us]", stats->drawtime);
 
 }
 
