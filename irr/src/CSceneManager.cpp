@@ -342,26 +342,56 @@ bool CSceneManager::isCulled(const ISceneNode *node) const
 
 	// can be seen by cam pyramid planes ?
 	if (!result && (node->getAutomaticCulling() & scene::EAC_FRUSTUM_BOX)) {
-		SViewFrustum frust = *cam->getViewFrustum();
+		/*
+			Test the node's oriented bounding box against the six frustum
+			planes directly, in world space.
 
-		// transform the frustum to the node's current absolute transformation
-		core::matrix4 invTrans(node->getAbsoluteTransformation(), core::matrix4::EM4CONST_INVERSE);
-		// invTrans.makeInverse();
-		frust.transform(invTrans);
+			The formulation this replaces transformed a *copy* of the frustum
+			into the node's local space - one 4x4 inversion, one inverse
+			transpose, six plane transforms with a normalize each, a bounding
+			box recomputation - and then classified the eight local box corners
+			against those planes, up to 48 dot products. All of that per node
+			per frame, which costs more than the draw call it is trying to
+			avoid: measured on llvmpipe, 800 mesh entities spent ~4ms/frame
+			here and the test culled nothing at all when the entities were in
+			front of the camera.
 
-		core::vector3df edges[8];
-		node->getBoundingBox().getEdges(edges);
+			The box is culled by plane i when every point of it is strictly in
+			front of that plane, i.e. when the minimum of (N.p + D) over the box
+			is positive. For p = M q with q ranging over the local box that
+			minimum is
 
-		for (s32 i = 0; i < scene::SViewFrustum::VF_PLANE_COUNT; ++i) {
-			bool boxInFrustum = false;
-			for (u32 j = 0; j < 8; ++j) {
-				if (frust.planes[i].classifyPointRelation(edges[j]) != core::ISREL3D_FRONT) {
-					boxInFrustum = true;
-					break;
-				}
-			}
+				N.(M c) + D - sum_k |(M^T N)_k| * e_k
 
-			if (!boxInFrustum) {
+			with c the local box centre and e its half extents - the standard
+			support function of an oriented box. That is exactly equivalent to
+			classifying all eight corners (a linear function over a convex box
+			attains its minimum at a corner), needs no matrix inversion and no
+			plane transformation, and reads the camera's planes in place.
+			src/test/test_irr_viewfrustum.cpp pins the equivalence of all three
+			formulations.
+		*/
+		const SViewFrustum *frust = cam->getViewFrustum();
+		const core::matrix4 &mat = node->getAbsoluteTransformation();
+		const core::aabbox3d<f32> &box = node->getBoundingBox();
+		const core::vector3df extent = box.getExtent() * 0.5f;
+
+		core::vector3df center;
+		mat.transformVect(center, box.getCenter());
+
+		// Irrlicht stores matrix4 row major, so the columns of the linear part
+		// are (m[0],m[1],m[2]), (m[4],m[5],m[6]) and (m[8],m[9],m[10]).
+		const f32 *m = mat.pointer();
+
+		for (u32 i = 0; i < SViewFrustum::VF_PLANE_COUNT; ++i) {
+			const core::vector3df &n = frust->planes[i].Normal;
+			const f32 radius =
+					core::abs_<f32>(n.X * m[0] + n.Y * m[1] + n.Z * m[2]) * extent.X +
+					core::abs_<f32>(n.X * m[4] + n.Y * m[5] + n.Z * m[6]) * extent.Y +
+					core::abs_<f32>(n.X * m[8] + n.Y * m[9] + n.Z * m[10]) * extent.Z;
+
+			if (n.dotProduct(center) + frust->planes[i].D - radius >
+					core::ROUNDING_ERROR_f32) {
 				result = true;
 				break;
 			}

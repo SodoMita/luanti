@@ -143,8 +143,26 @@ TEST_CASE("frustum-in-node-space and node-in-world-space culling agree")
 				culled_b = all_front;
 			}
 
+			// formulation C: the support function of the oriented box, which is
+			// what CSceneManager::isCulled() computes
+			const core::vector3df extent = box.getExtent() * 0.5f;
+			core::vector3df center;
+			m.transformVect(center, box.getCenter());
+			const f32 *mm = m.pointer();
+			bool culled_c = false;
+			for (u32 i = 0; i < SViewFrustum::VF_PLANE_COUNT && !culled_c; ++i) {
+				const core::vector3df &n = frustum.planes[i].Normal;
+				const f32 radius =
+						core::abs_<f32>(n.X * mm[0] + n.Y * mm[1] + n.Z * mm[2]) * extent.X +
+						core::abs_<f32>(n.X * mm[4] + n.Y * mm[5] + n.Z * mm[6]) * extent.Y +
+						core::abs_<f32>(n.X * mm[8] + n.Y * mm[9] + n.Z * mm[10]) * extent.Z;
+				culled_c = n.dotProduct(center) + frustum.planes[i].D - radius >
+						core::ROUNDING_ERROR_f32;
+			}
+
 			INFO("angle=" << angle << " radius=" << radius);
 			CHECK(culled_a == culled_b);
+			CHECK(culled_a == culled_c);
 		}
 	}
 }
