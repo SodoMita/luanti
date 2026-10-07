@@ -16,6 +16,9 @@ local dist = tonumber(S:get("bench_dist") or "20") or 20
 local spacing = tonumber(S:get("bench_spacing") or "1.05") or 1.05
 local pitch = tonumber(S:get("bench_pitch") or "0") or 0
 local yaw = tonumber(S:get("bench_yaw") or "0") or 0
+-- radians per second of continuous yaw, for the moving-camera regime. 0 keeps
+-- the camera frozen, which is what every pixel-comparison run needs.
+local yaw_speed = tonumber(S:get("bench_yaw_speed") or "0") or 0
 -- nodes re-placed per 0.5 s tick, forcing the client to regenerate mesh
 local churn = tonumber(S:get("bench_churn") or "0") or 0
 
@@ -317,6 +320,15 @@ core.register_globalstep(function(dtime)
 			string.format("%.1f", (core.get_us_time() - t0) / 1000) .. " ms" ..
 			" (after " .. string.format("%.1f", since_join) .. " s)")
 		return
+	end
+
+	-- A frozen camera hides everything keyed on camera movement: the draw list
+	-- rebuild, the transparent-mesh reorder and the per-frame merge-key build in
+	-- transformBuffersToDrawOrder(). Sweep the yaw every step when asked to.
+	if yaw_speed ~= 0 then
+		yaw = yaw + yaw_speed * dtime
+		player_ref:set_look_horizontal(yaw)
+		player_ref:set_look_vertical(pitch)
 	end
 
 	counter = counter + dtime
