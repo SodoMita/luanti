@@ -178,8 +178,19 @@ public:
 		}
 	}
 
-	/// Generates the block mesh and hashes the collected geometry
-	u64 generate(u32 &out_vertices, u32 &out_indices, u32 &out_buffers)
+	/**
+	 * Generates the block mesh. With `hash`, the collected geometry is also
+	 * hashed so that two builds can be compared byte for byte.
+	 *
+	 * The hash costs more than the meshgen it verifies on the big cases: a block
+	 * of mesh nodes collects ~1.2M vertices, and FNV-1a over 36 bytes each plus
+	 * the indices is ~55MB of byte-at-a-time work. Timing it together with the
+	 * meshgen made every number this benchmark reported roughly 2.6x too large
+	 * and diluted real differences by the same factor, so the measured path
+	 * skips it and verification runs it once, outside the chronometer.
+	 */
+	u64 generate(u32 &out_vertices, u32 &out_indices, u32 &out_buffers,
+			bool with_hash = true)
 	{
 		MeshCollector collector(v3f(0), v3f(0));
 		MapblockMeshGenerator generator(&data, &collector);
@@ -199,6 +210,10 @@ public:
 		for (u8 layer = 0; layer < MAX_TILE_LAYERS; layer++) {
 			for (const PreMeshBuffer &p : collector.prebuffers[layer]) {
 				out_buffers++;
+				out_vertices += (u32) p.vertices.size();
+				out_indices += (u32) p.indices.size();
+				if (!with_hash)
+					continue;
 				// field by field: TileLayer holds a texture pointer and both it and
 				// the vertex padding would make the hash depend on addresses
 				mix(&layer, sizeof(layer));
@@ -209,7 +224,6 @@ public:
 				mix(&p.layer.color, sizeof(p.layer.color));
 				mix(&p.layer.has_color, sizeof(p.layer.has_color));
 				for (const video::S3DVertex &v : p.vertices) {
-					out_vertices++;
 					mix(&v.Pos, sizeof(v.Pos));
 					mix(&v.Normal, sizeof(v.Normal));
 					mix(&v.Color, sizeof(v.Color));
@@ -217,15 +231,14 @@ public:
 					mix(&v.Aux, sizeof(v.Aux));
 				}
 				mix(p.indices.data(), p.indices.size() * sizeof(u16));
-				out_indices += (u32) p.indices.size();
 			}
 		}
 		return hash;
 	}
 
-	u64 runOnce(u32 &vertices, u32 &indices, u32 &buffers)
+	u64 runOnce(u32 &vertices, u32 &indices, u32 &buffers, bool with_hash = true)
 	{
-		return generate(vertices, indices, buffers);
+		return generate(vertices, indices, buffers, with_hash);
 	}
 
 private:
@@ -314,12 +327,13 @@ TEST_CASE("benchmark_meshgen")
 		BENCHMARK_ADVANCED((std::string("meshgen_") + c.name).c_str())
 		(Catch::Benchmark::Chronometer meter) {
 			meter.measure([&] {
-				// writing to the outer variables keeps the result observable
-				hash = f.bench.runOnce(vertices, indices, buffers);
+				// writing to the outer variables keeps the result observable;
+				// the geometry hash is deliberately not part of the measurement
+				f.bench.runOnce(vertices, indices, buffers, /*with_hash=*/false);
 			});
 		};
 
-		f.bench.runOnce(vertices, indices, buffers);
+		hash = f.bench.runOnce(vertices, indices, buffers);
 		reportHash(c.name, hash, vertices, indices, buffers);
 		INFO("meshgen_" << c.name << " buffers=" << buffers <<
 				" vertices=" << vertices << " hash=" << std::hex << hash);
